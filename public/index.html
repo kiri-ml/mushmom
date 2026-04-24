@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Mushmom tracks MapleLegends server population trends over time."
+    />
+    <title>Mushmom | MapleLegends Statistics</title>
+    <link rel="icon" href="/assets/icons/favicon.ico" sizes="any" />
+    <link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png" sizes="180x180" />
+    <link rel="preconnect" href="https://cdn.jsdmirror.com" />
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="hero" aria-labelledby="page-title">
+        <div class="hero-copy">
+          <p class="eyebrow">MapleLegends server statistics</p>
+          <div class="title-lockup">
+            <h1 id="page-title">Mushmom</h1>
+            <img
+              src="/assets/icons/mushmom.png"
+              alt=""
+              class="hero-mushmom"
+              width="119"
+              height="110"
+              aria-hidden="true"
+            />
+          </div>
+          <p class="lede">
+            Population telemetry for MapleLegends, inspired by
+            <a href="https://geospiza.me/ml-online/">geospiza</a>.
+          </p>
+        </div>
+        <div class="hero-panel" aria-label="Current server status">
+          <span class="status-dot" id="status-dot" aria-hidden="true"></span>
+          <span id="status-text">LOADING</span>
+        </div>
+      </section>
+
+      <section class="metrics" aria-label="Latest MapleLegends metrics">
+        <article class="metric-card">
+          <span>Current players</span>
+          <strong id="current-count">--</strong>
+        </article>
+        <article class="metric-card">
+          <span>24h peak</span>
+          <strong id="peak-count">--</strong>
+        </article>
+        <article class="metric-card">
+          <span>24h average</span>
+          <strong id="average-count">--</strong>
+        </article>
+        <article class="metric-card">
+          <span>Last sample</span>
+          <strong id="last-sample">--</strong>
+        </article>
+      </section>
+
+      <section class="toolbar" aria-label="Chart controls">
+        <div class="segmented-control" role="group" aria-label="Time range">
+          <button type="button" class="is-active" data-range="7d">7d</button>
+          <button type="button" data-range="28d">28d</button>
+          <button type="button" data-range="90d">90d</button>
+          <button type="button" data-range="180d">180d</button>
+          <button type="button" data-range="ytd">YTD</button>
+          <button type="button" data-range="1y">1y</button>
+          <button type="button" data-range="3y">3y</button>
+          <button type="button" data-range="all">All</button>
+        </div>
+        <nav class="chart-tabs" aria-label="Chart views">
+          <button type="button" class="is-active" data-chart="timeline">Timeline</button>
+          <button type="button" data-chart="heatmap">Heatmap</button>
+          <button type="button" data-chart="distribution">Distribution</button>
+        </nav>
+      </section>
+
+      <section class="chart-section" aria-label="Player count chart">
+        <div id="population-chart" class="chart" role="img" aria-label="MapleLegends player count over time"></div>
+      </section>
+      <p class="details-note">Times shown in your local timezone.</p>
+
+      <section class="details" aria-label="Dataset details">
+        <div>
+          <span class="detail-label">Samples</span>
+          <strong id="sample-count">--</strong>
+        </div>
+        <div>
+          <span class="detail-label">Range</span>
+          <strong id="range-label">--</strong>
+        </div>
+        <div>
+          <span class="detail-label">Source</span>
+          <strong id="source-label">--</strong>
+        </div>
+      </section>
+    </main>
+
+    <script src="/load.js" defer></script>
+    <script src="/app.js" defer></script>
+    <script>
+      (() => {
+        const sources = [
+          "https://cdn.jsdmirror.com/npm/echarts@5.6.0/dist/echarts.min.js",
+          "https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js",
+        ];
+        const scripts = [];
+        let settled = false;
+
+        sources.forEach((source) => {
+          const script = document.createElement("script");
+          script.src = source;
+          script.async = true;
+          script.onload = () => {
+            if (settled) return;
+            settled = true;
+            scripts.forEach((item) => {
+              if (item !== script && item.parentNode) item.remove();
+            });
+            window.__mushmomEchartsReady?.();
+          };
+          scripts.push(script);
+          document.head.append(script);
+        });
+      })();
+    </script>
+  </body>
+</html>

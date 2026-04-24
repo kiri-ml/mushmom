@@ -1,0 +1,64 @@
+name: Update Stats Archive
+
+on:
+  schedule:
+    - cron: "33 1-3 1 * *"
+  workflow_dispatch:
+
+concurrency:
+  group: update-stats-archive
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: Generate stats archive
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      archive_changed: ${{ steps.archive.outputs.changed }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          ref: main
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate stats archive
+        run: npm run generate:stats-archive
+        env:
+          GOOGLE_API_URL: ${{ secrets.GOOGLE_API_URL }}
+
+      - name: Detect archive changes
+        id: archive
+        run: |
+          if [ -z "$(git status --porcelain -- public/assets/stats)" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit archive changes
+        if: steps.archive.outputs.changed == 'true'
+        uses: EndBug/add-and-commit@v10
+        with:
+          add: public/assets/stats
+          author_name: github-actions[bot]
+          author_email: github-actions[bot]@users.noreply.github.com
+          message: "[ci] monthly stats archive"
+
+  deploy:
+    name: Deploy to Cloudflare Pages
+    needs: update
+    if: needs.update.outputs.archive_changed == 'true'
+    uses: ./.github/workflows/deploy.yml
+    secrets: inherit

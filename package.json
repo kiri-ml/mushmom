@@ -1,0 +1,17 @@
+{
+  "name": "mushmom",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MapleLegends population statistics dashboard for Cloudflare Pages.",
+  "scripts": {
+    "dev": "wrangler pages dev public",
+    "test": "node --test",
+    "build": "node scripts/build.js",
+    "generate:stats-archive": "node scripts/generate_stats_archive.js",
+    "preview": "wrangler pages dev public",
+    "deploy": "wrangler pages deploy public --project-name mushmom"
+  },
+  "devDependencies": {
+    "wrangler": "^4.84.1"
+  }
+}
