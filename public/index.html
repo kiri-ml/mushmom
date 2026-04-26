@@ -6,8 +6,9 @@
     <meta
       name="description"
       content="Mushmom tracks MapleLegends server population trends over time."
+      data-i18n-content="meta.description"
     />
-    <title>Mushmom | MapleLegends Statistics</title>
+    <title data-i18n="meta.title">Mushmom | MapleLegends Statistics</title>
     <link rel="icon" href="/assets/icons/favicon.ico" sizes="any" />
     <link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png" sizes="180x180" />
     <link rel="stylesheet" href="/styles.css" />
@@ -16,9 +17,9 @@
     <main class="app-shell">
       <section class="hero" aria-labelledby="page-title">
         <div class="hero-copy">
-          <p class="eyebrow">MapleLegends server statistics</p>
+          <p class="eyebrow" data-i18n="hero.eyebrow">MapleLegends server statistics</p>
           <div class="title-lockup">
-            <h1 id="page-title">Mushmom</h1>
+            <h1 id="page-title" data-i18n="app.name">Mushmom</h1>
             <img
               src="/assets/icons/mushmom.png"
               alt=""
@@ -29,69 +30,106 @@
             />
           </div>
           <p class="lede">
-            Population telemetry for MapleLegends, inspired by
-            <a href="https://geospiza.me/ml-online/">geospiza</a>.
+            <span data-i18n="hero.lede.prefix">Population telemetry for MapleLegends, inspired by</span>
+            <a href="https://geospiza.me/ml-online/">geospiza</a><span data-i18n="hero.lede.suffix">.</span>
           </p>
         </div>
-        <div class="hero-panel" aria-label="Current server status">
-          <span class="status-dot" id="status-dot" aria-hidden="true"></span>
-          <span id="status-text">LOADING</span>
+        <div class="hero-actions">
+          <div
+            class="hero-panel"
+            aria-label="Current server status"
+            data-i18n-aria-label="aria.currentServerStatus"
+          >
+            <span class="status-dot" id="status-dot" aria-hidden="true"></span>
+            <span id="status-text" data-i18n="status.loading">LOADING</span>
+          </div>
+          <select
+            id="language-select"
+            class="language-switcher"
+            aria-label="Language"
+            data-i18n-aria-label="language.label"
+          >
+            <option value="en">English</option>
+            <option value="zh-CN">简体中文</option>
+            <option value="zh-TW">繁體中文</option>
+            <option value="ko">한국어</option>
+            <option value="ja">日本語</option>
+            <option value="es">Español</option>
+            <option value="pt-BR">Português</option>
+            <option value="nl">Nederlands</option>
+          </select>
         </div>
       </section>
 
-      <section class="metrics" aria-label="Latest MapleLegends metrics">
+      <section
+        class="metrics"
+        aria-label="Latest MapleLegends metrics"
+        data-i18n-aria-label="aria.latestMetrics"
+      >
         <article class="metric-card">
-          <span>Current players</span>
+          <span data-i18n="metric.currentPlayers">Current players</span>
           <strong id="current-count">--</strong>
         </article>
         <article class="metric-card">
-          <span>24h peak</span>
+          <span data-i18n="metric.peak24h">24h peak</span>
           <strong id="peak-count">--</strong>
         </article>
         <article class="metric-card">
-          <span>24h average</span>
+          <span data-i18n="metric.average24h">24h average</span>
           <strong id="average-count">--</strong>
         </article>
         <article class="metric-card">
-          <span>Last sample</span>
+          <span data-i18n="metric.lastSample">Last sample</span>
           <strong id="last-sample">--</strong>
         </article>
       </section>
 
-      <section class="toolbar" aria-label="Chart controls">
-        <div class="segmented-control" role="group" aria-label="Time range">
-          <button type="button" class="is-active" data-range="7d">7d</button>
-          <button type="button" data-range="28d">28d</button>
-          <button type="button" data-range="90d">90d</button>
-          <button type="button" data-range="180d">180d</button>
-          <button type="button" data-range="ytd">YTD</button>
-          <button type="button" data-range="1y">1y</button>
-          <button type="button" data-range="3y">3y</button>
-          <button type="button" data-range="all">All</button>
+      <section class="toolbar" aria-label="Chart controls" data-i18n-aria-label="aria.chartControls">
+        <div class="segmented-control" role="group" aria-label="Time range" data-i18n-aria-label="aria.timeRange">
+          <button type="button" class="is-active" data-range="7d" data-i18n="range.7d">7d</button>
+          <button type="button" data-range="28d" data-i18n="range.28d">28d</button>
+          <button type="button" data-range="90d" data-i18n="range.90d">90d</button>
+          <button type="button" data-range="180d" data-i18n="range.180d">180d</button>
+          <button type="button" data-range="ytd" data-i18n="range.ytd">YTD</button>
+          <button type="button" data-range="1y" data-i18n="range.1y">1y</button>
+          <button type="button" data-range="3y" data-i18n="range.3y">3y</button>
+          <button type="button" data-range="all" data-i18n="range.all">All</button>
         </div>
-        <nav class="chart-tabs" aria-label="Chart views">
-          <button type="button" class="is-active" data-chart="timeline">Timeline</button>
-          <button type="button" data-chart="heatmap">Heatmap</button>
-          <button type="button" data-chart="distribution">Distribution</button>
+        <nav class="chart-tabs" aria-label="Chart views" data-i18n-aria-label="aria.chartViews">
+          <button type="button" class="is-active" data-chart="timeline" data-i18n="chartView.timeline">Timeline</button>
+          <button type="button" data-chart="heatmap" data-i18n="chartView.heatmap">Heatmap</button>
+          <button type="button" data-chart="distribution" data-i18n="chartView.distribution">Distribution</button>
         </nav>
       </section>
 
-      <section class="chart-section" aria-label="Player count chart">
-        <div id="population-chart" class="chart" role="img" aria-label="MapleLegends player count over time"></div>
+      <section
+        class="chart-section"
+        aria-label="Player count chart"
+        data-i18n-aria-label="aria.playerCountChart"
+      >
+        <div
+          id="population-chart"
+          class="chart"
+          role="img"
+          aria-label="MapleLegends player count over time"
+          data-i18n-aria-label="aria.populationChartImage"
+        ></div>
       </section>
-      <p class="details-note">Times shown in your local timezone.</p>
+      <p class="details-note" id="details-note" data-i18n-timezone-note="details.localTimezone">
+        Times shown in your local timezone.
+      </p>
 
-      <section class="details" aria-label="Dataset details">
+      <section class="details" aria-label="Dataset details" data-i18n-aria-label="aria.datasetDetails">
         <div>
-          <span class="detail-label">Samples</span>
+          <span class="detail-label" data-i18n="details.samples">Samples</span>
           <strong id="sample-count">--</strong>
         </div>
         <div>
-          <span class="detail-label">Range</span>
+          <span class="detail-label" data-i18n="details.range">Range</span>
           <strong id="range-label">--</strong>
         </div>
         <div>
-          <span class="detail-label">Source</span>
+          <span class="detail-label" data-i18n="details.source">Source</span>
           <strong id="source-label">--</strong>
         </div>
       </section>
@@ -120,6 +158,8 @@
         document.head.appendChild(script);
       });
     </script>
+    <script src="/i18n-data.js" defer></script>
+    <script src="/i18n.js" defer></script>
     <script src="/load.js" defer></script>
     <script src="/app.js" defer></script>
   </body>

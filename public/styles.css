@@ -97,7 +97,16 @@ h1 {
   color: var(--text);
 }
 
-.hero-panel {
+.hero-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  justify-self: end;
+}
+
+.hero-panel,
+.language-switcher {
   display: inline-flex;
   align-items: center;
   gap: 10px;
@@ -109,6 +118,16 @@ h1 {
   box-shadow: var(--shadow);
   color: var(--muted);
   white-space: nowrap;
+}
+
+.language-switcher {
+  width: 100%;
+  min-width: 156px;
+  box-shadow: none;
+  padding: 0 12px;
+  color: var(--text);
+  font: inherit;
+  font-weight: 800;
 }
 
 #status-text {
@@ -125,12 +144,12 @@ h1 {
   box-shadow: 0 0 18px rgba(241, 196, 79, 0.7);
 }
 
-.status-dot.is-error {
+.status-dot.is-failed {
   background: var(--danger);
   box-shadow: 0 0 18px rgba(255, 111, 97, 0.6);
 }
 
-.status-dot.is-live {
+.status-dot.is-ready {
   background: var(--accent);
   box-shadow: 0 0 18px rgba(125, 216, 125, 0.7);
 }
@@ -326,6 +345,18 @@ h1 {
     padding-top: 18px;
   }
 
+  .hero-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    justify-self: start;
+    width: 100%;
+  }
+
+  .hero-panel,
+  .language-switcher {
+    min-width: 0;
+  }
+
   .title-lockup {
     align-items: center;
   }
@@ -373,4 +404,9 @@ h1 {
   .hero-mushmom {
     width: 64px;
   }
+
+  .hero-actions {
+    gap: 6px;
+  }
+
 }

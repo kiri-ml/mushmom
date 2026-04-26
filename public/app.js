@@ -71,8 +71,23 @@ let currentRange = "7d";
 let activeChart = "timeline";
 let chart;
 let historicalSource = { name: "Unknown", url: null };
+let currentStatus = { kind: "loading", key: "status.loading", params: {} };
 let pendingRender = false;
 const echartsReady = globalThis.__mushmomEchartsReady;
+
+function tr(key, params = {}) {
+  const translate = globalThis.t;
+  return typeof translate === "function" ? translate(key, params) : key;
+}
+
+function getCurrentLocale() {
+  const getCurrentLang = globalThis.MushmomI18n?.getCurrentLang;
+  return typeof getCurrentLang === "function" ? getCurrentLang() : undefined;
+}
+
+function formatLocaleNumber(value) {
+  return Number(value).toLocaleString(getCurrentLocale());
+}
 
 function parseTimestamp(value) {
   if (!value) return null;
@@ -137,11 +152,11 @@ function truncateDateToSecond(date) {
 }
 
 function formatInteger(value) {
-  return Number.isFinite(value) ? Math.round(value).toLocaleString() : "--";
+  return Number.isFinite(value) ? Math.round(value).toLocaleString(getCurrentLocale()) : "--";
 }
 
 function formatTime(date) {
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat(getCurrentLocale(), {
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
@@ -149,7 +164,7 @@ function formatTime(date) {
 }
 
 function formatDate(date) {
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat(getCurrentLocale(), {
     year: "numeric",
     month: "short",
     day: "numeric",
@@ -167,11 +182,30 @@ function bucketDurationMs(config) {
 }
 
 function formatShortDate(date, includeYear = false) {
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat(getCurrentLocale(), {
     month: "short",
     day: "numeric",
     ...(includeYear ? { year: "numeric" } : {}),
   }).format(date);
+}
+
+function formatTimelineAxisLabel(value, range = currentRange) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+
+  if (range === "7d") {
+    return `${formatShortDate(date)}\n${formatTime(date)}`;
+  }
+
+  return formatShortDate(date, ["1y", "3y", "all", "ytd"].includes(range));
+}
+
+function formatWeekdayLabels() {
+  const formatter = new Intl.DateTimeFormat(getCurrentLocale(), { weekday: "short" });
+
+  return Array.from({ length: 7 }, (_, dayOffset) => {
+    return formatter.format(new Date(2026, 0, 4 + dayOffset, 12));
+  });
 }
 
 function formatBucketRange(startMs, config) {
@@ -197,10 +231,15 @@ function formatBucketRange(startMs, config) {
     : `${formatShortDate(start, true)} - ${formatShortDate(end, true)}`;
 }
 
-function setStatus(kind, text) {
-  statusDot.classList.toggle("is-live", kind === "live");
-  statusDot.classList.toggle("is-error", kind === "error");
-  statusText.textContent = text;
+function setStatus(kind, key, params = {}) {
+  currentStatus = { kind, key, params };
+  statusDot.classList.toggle("is-ready", kind === "ready");
+  statusDot.classList.toggle("is-failed", kind === "failed");
+  statusText.textContent = tr(key, params);
+}
+
+function refreshStatusText() {
+  statusText.textContent = tr(currentStatus.key, currentStatus.params);
 }
 
 function pointsForRange(points, range) {
@@ -255,7 +294,7 @@ function updateHistoricalMetrics(points, source, sourceUrl = null) {
   elements.peak.textContent = formatInteger(peak);
   elements.average.textContent = formatInteger(average);
   elements.lastSample.textContent = latest ? formatTime(latest.date) : "--";
-  elements.sampleCount.textContent = points.length.toLocaleString();
+  elements.sampleCount.textContent = formatLocaleNumber(points.length);
   setSourceLabel(source, sourceUrl);
 
   if (points.length >= 2) {
@@ -323,7 +362,7 @@ function buildDistributionBuckets(counts) {
   const maxCount = finiteCounts.reduce((max, value) => Math.max(max, value), 0);
   const bucketCount = Math.max(1, Math.ceil((maxCount + 1) / DISTRIBUTION_STEP));
   const histogramBuckets = Array.from({ length: bucketCount }, (_, index) => ({
-    label: `${(index * DISTRIBUTION_STEP).toLocaleString()}-${Math.min(((index + 1) * DISTRIBUTION_STEP) - 1, maxCount).toLocaleString()}`,
+    label: `${formatLocaleNumber(index * DISTRIBUTION_STEP)}-${formatLocaleNumber(Math.min(((index + 1) * DISTRIBUTION_STEP) - 1, maxCount))}`,
     count: 0,
   }));
 
@@ -343,14 +382,22 @@ function formatPercentage(value) {
 }
 
 const TIMELINE_RANGE_CONFIG = {
-  "7d": { type: "line", label: "Players" },
-  "28d": { type: "candlestick", label: "Players (4h)", unit: "hour", size: 4 },
-  "90d": { type: "candlestick", label: "Players (12h)", unit: "hour", size: 12 },
-  "180d": { type: "candlestick", label: "Players (1d)", unit: "day", size: 1 },
-  "1y": { type: "candlestick", label: "Players (48h)", unit: "day", size: 2 },
-  "3y": { type: "candlestick", label: "Players (1w)", unit: "week", size: 1 },
-  all: { type: "candlestick", label: "Players (1w)", unit: "week", size: 1 },
+  "7d": { type: "line", labelKey: "chart.series.players" },
+  "28d": { type: "candlestick", labelKey: "chart.series.playersBucket", bucketKey: "bucket.4h", unit: "hour", size: 4 },
+  "90d": { type: "candlestick", labelKey: "chart.series.playersBucket", bucketKey: "bucket.12h", unit: "hour", size: 12 },
+  "180d": { type: "candlestick", labelKey: "chart.series.playersBucket", bucketKey: "bucket.1d", unit: "day", size: 1 },
+  "1y": { type: "candlestick", labelKey: "chart.series.playersBucket", bucketKey: "bucket.48h", unit: "day", size: 2 },
+  "3y": { type: "candlestick", labelKey: "chart.series.playersBucket", bucketKey: "bucket.1w", unit: "week", size: 1 },
+  all: { type: "candlestick", labelKey: "chart.series.playersBucket", bucketKey: "bucket.1w", unit: "week", size: 1 },
 };
+
+function getSeriesLabel(config) {
+  if (config.bucketKey) {
+    return tr(config.labelKey, { bucket: tr(config.bucketKey) });
+  }
+
+  return tr(config.labelKey);
+}
 
 const RANGE_WINDOW_MS = {
   "24h": 864e5,
@@ -447,7 +494,7 @@ function getTimelineConfig(range, visible) {
   return TIMELINE_RANGE_CONFIG["1y"];
 }
 
-function emptyGraphic(text = "No live data loaded") {
+function emptyGraphic(text = tr("ui.noLiveData")) {
   return {
     type: "text",
     left: "center",
@@ -470,7 +517,7 @@ function baseAxisOption() {
       borderColor: "#35403e",
       textStyle: { color: "#f4f1e8" },
       valueFormatter: (value) =>
-        Number.isFinite(Number(value)) ? Number(value).toLocaleString() : value,
+        Number.isFinite(Number(value)) ? formatLocaleNumber(Number(value)) : value,
     },
   };
 }
@@ -498,10 +545,10 @@ function buildTimelineOptions(points) {
               const [time, open, close, low, high] = item.value;
               return [
                 `<strong>${formatBucketRange(time, config)}</strong>`,
-                `Start: ${formatInteger(open)}`,
-                `Peak: ${formatInteger(high)}`,
-                `Trough: ${formatInteger(low)}`,
-                `End: ${formatInteger(close)}`,
+                `${tr("chart.tooltip.start")}: ${formatInteger(open)}`,
+                `${tr("chart.tooltip.peak")}: ${formatInteger(high)}`,
+                `${tr("chart.tooltip.trough")}: ${formatInteger(low)}`,
+                `${tr("chart.tooltip.end")}: ${formatInteger(close)}`,
               ].join("<br />");
             },
           }
@@ -511,13 +558,16 @@ function buildTimelineOptions(points) {
             borderColor: "#35403e",
             textStyle: { color: "#f4f1e8" },
             valueFormatter: (value) =>
-              Number.isFinite(Number(value)) ? Number(value).toLocaleString() : value,
+              Number.isFinite(Number(value)) ? formatLocaleNumber(Number(value)) : value,
           },
     grid: { left: 52, right: 24, top: 34, bottom: 76 },
     xAxis: {
       type: "time",
       axisLine: { lineStyle: { color: "#35403e" } },
-      axisLabel: { color: "#a9b1ad" },
+      axisLabel: {
+        color: "#a9b1ad",
+        formatter: (value) => formatTimelineAxisLabel(value, currentRange),
+      },
       splitLine: { show: false },
     },
     yAxis: {
@@ -544,7 +594,7 @@ function buildTimelineOptions(points) {
     series: [
       config.type === "candlestick"
         ? {
-            name: config.label,
+            name: getSeriesLabel(config),
             type: "candlestick",
             data: candles,
             itemStyle: {
@@ -555,7 +605,7 @@ function buildTimelineOptions(points) {
             },
           }
         : {
-            name: config.label,
+            name: getSeriesLabel(config),
             type: "line",
             smooth: true,
             showSymbol: visible.length < 80,
@@ -591,7 +641,7 @@ function buildTimelineOptions(points) {
 
 function buildHeatmapOptions(points) {
   const visible = pointsForRange(points, currentRange);
-  const weekdayLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const weekdayLabels = formatWeekdayLabels();
   const hourLabels = Array.from({ length: 24 }, (_, hour) => `${hour}:00`);
   const percentileRanks = getHeatmapPercentileRanks(visible);
   const buckets = new Map();
@@ -628,15 +678,15 @@ function buildHeatmapOptions(points) {
         const [hour, day, , count, percentiles, samples] = params.value;
         const rows = [
           `<strong>${weekdayLabels[day]} ${hourLabels[hour]}</strong>`,
-          `avg: ${count.toLocaleString()}`,
+          `${tr("chart.tooltip.avg")}: ${formatInteger(count)}`,
         ];
 
         Object.entries(percentiles || {}).forEach(([label, value]) => {
-          rows.push(`${label}: ${value.toLocaleString()}`);
+          rows.push(`${label}: ${formatInteger(value)}`);
         });
 
         if (percentiles && Object.keys(percentiles).length > 0) {
-          rows.push(`${samples.toLocaleString()} samples`);
+          rows.push(tr("chart.tooltip.samplesCount", { count: formatLocaleNumber(samples) }));
         }
 
         return rows.join("<br />");
@@ -674,7 +724,7 @@ function buildHeatmapOptions(points) {
     },
     series: [
       {
-        name: "Average players",
+        name: tr("chart.series.averagePlayers"),
         type: "heatmap",
         data: values,
         emphasis: {
@@ -710,8 +760,8 @@ function buildDistributionOptions(points) {
         const bucket = buckets[item.dataIndex];
         return [
           bucket.label,
-          `${formatPercentage(item.value)} of samples`,
-          `${bucket.count.toLocaleString()} samples`,
+          tr("chart.tooltip.ofSamples", { percent: formatPercentage(item.value) }),
+          tr("chart.tooltip.samplesCount", { count: formatLocaleNumber(bucket.count) }),
         ].join("<br />");
       },
     },
@@ -732,7 +782,7 @@ function buildDistributionOptions(points) {
     },
     series: [
       {
-        name: "Samples (%)",
+        name: tr("chart.series.samplesPercent"),
         type: "bar",
         barMaxWidth: 38,
         itemStyle: {
@@ -789,7 +839,7 @@ function mergePoints(...groups) {
 
 async function fetchHistoricalStats() {
   const loader = globalThis.MushmomStatsLoader;
-  if (!loader) throw new Error("Stats loader is not available.");
+  if (!loader) throw new Error(tr("error.statsLoaderUnavailable"));
 
   await loader.loadStatsHistory({
     normalizePayload,
@@ -818,11 +868,11 @@ async function fetchHistoricalStats() {
 
 async function fetchCurrentUserCount() {
   const response = await fetch("/api/current", { headers: { Accept: "application/json" } });
-  if (!response.ok) throw new Error(`Current user request failed: ${response.status}`);
+  if (!response.ok) throw new Error(tr("error.currentUserRequestFailed", { status: response.status }));
 
   const payload = await response.json();
   const usercount = Number(payload.usercount);
-  if (!Number.isFinite(usercount)) throw new Error("Current user response was missing usercount");
+  if (!Number.isFinite(usercount)) throw new Error(tr("error.currentUserMissingCount"));
 
   elements.current.textContent = formatInteger(usercount);
 }
@@ -830,7 +880,7 @@ async function fetchCurrentUserCount() {
 async function loadStats() {
   const hadHistoricalData = allPoints.length > 0;
 
-  if (!hadHistoricalData) setStatus("loading", "LOADING");
+  if (!hadHistoricalData) setStatus("loading", "status.loading");
 
   const [statsResult, currentResult] = await Promise.allSettled([
     fetchHistoricalStats(),
@@ -838,14 +888,14 @@ async function loadStats() {
   ]);
 
   if (statsResult.status === "fulfilled") {
-    setStatus("live", "LIVE");
+    setStatus("ready", "status.ready");
   } else {
     console.warn(statsResult.reason);
     if (!hadHistoricalData) {
       allPoints = [];
-      clearHistoricalMetrics("Unavailable");
+      clearHistoricalMetrics(tr("source.unavailable"));
     }
-    setStatus("error", "OFFLINE");
+    setStatus("failed", "status.failed");
   }
 
   if (currentResult.status === "rejected") {
@@ -877,12 +927,26 @@ chartButtons.forEach((button) => {
   });
 });
 
+window.addEventListener("mushmom:languagechange", () => {
+  refreshStatusText();
+
+  if (allPoints.length > 0) {
+    updateHistoricalMetrics(allPoints, historicalSource.name, historicalSource.url);
+  } else if (currentStatus.kind === "error") {
+    clearHistoricalMetrics(tr("source.unavailable"));
+  }
+
+  render();
+});
+
 loadStatsWhenVisible();
 
 globalThis.__MUSHMOM_TEST__ = {
   normalizePayload,
   isKnownBadPoint,
   formatTime,
+  formatTimelineAxisLabel,
+  formatWeekdayLabels,
   formatBucketRange,
   getHeatmapVisualBounds,
   getHeatmapPercentileRanks,
@@ -893,5 +957,8 @@ globalThis.__MUSHMOM_TEST__ = {
   loadStatsWhenVisible,
   setCurrentRangeForTest: (range) => {
     currentRange = range;
+  },
+  setActiveChartForTest: (chartName) => {
+    activeChart = chartName;
   },
 };
