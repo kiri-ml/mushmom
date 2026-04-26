@@ -12,6 +12,6 @@
     "deploy": "wrangler pages deploy public --project-name mushmom"
   },
   "devDependencies": {
-    "wrangler": "^4.84.1"
+    "wrangler": "^4.85.0"
   }
 }
