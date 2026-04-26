@@ -84,6 +84,24 @@ test("toolbar defaults to 7d and no longer exposes 24h", () => {
   assert.match(indexHtml, /class="is-active" data-range="7d"/);
 });
 
+test("echarts loader chooses one cdn from the user language", () => {
+  assert.match(indexHtml, /const GLOBAL_CDN = "https:\/\/cdn\.jsdelivr\.net\/npm\/echarts@5\.6\.0\/dist\/echarts\.min\.js";/);
+  assert.match(indexHtml, /const CHINA_CDN = "https:\/\/cdn\.jsdmirror\.com\/npm\/echarts@5\.6\.0\/dist\/echarts\.min\.js";/);
+  assert.match(indexHtml, /const preferChinaCdn = langs\.some\(\(lang\) => \/\^zh-CN\$\/i\.test\(lang\)\);/);
+  assert.match(indexHtml, /const source = preferChinaCdn \? CHINA_CDN : GLOBAL_CDN;/);
+  assert.match(indexHtml, /window\.__mushmomEchartsReady = new Promise\(\(resolve\) => \{/);
+  assert.match(indexHtml, /script\.src = source;/);
+  assert.match(indexHtml, /script\.onload = \(\) => \{/);
+  assert.match(indexHtml, /window\.__mushmomEchartsReady = new Promise[\s\S]*<script src="\/app\.js" defer><\/script>/);
+  assert.match(appJs, /const echartsReady = globalThis\.__mushmomEchartsReady;/);
+  assert.doesNotMatch(indexHtml, /__mushmomEchartsReady\?\.\(\)/);
+  assert.doesNotMatch(indexHtml, /__mushmomEchartsLoaded/);
+  assert.doesNotMatch(indexHtml, /const sources = /);
+  assert.doesNotMatch(indexHtml, /Promise\.race/);
+  assert.doesNotMatch(indexHtml, /CDN_TIMEOUT_MS/);
+  assert.doesNotMatch(indexHtml, /__mushmomEchartsFailed/);
+});
+
 test("timeline chart uses the current range mapping", () => {
   assert.match(appJs, /"7d": \{ type: "line", label: "Players" \}/);
   assert.match(appJs, /"28d": \{ type: "candlestick", label: "Players \(4h\)", unit: "hour", size: 4 \}/);

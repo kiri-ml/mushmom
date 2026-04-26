@@ -10,8 +10,6 @@
     <title>Mushmom | MapleLegends Statistics</title>
     <link rel="icon" href="/assets/icons/favicon.ico" sizes="any" />
     <link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png" sizes="180x180" />
-    <link rel="preconnect" href="https://cdn.jsdmirror.com" />
-    <link rel="preconnect" href="https://cdn.jsdelivr.net" />
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
@@ -99,33 +97,30 @@
       </section>
     </main>
 
+    <script>
+      const GLOBAL_CDN = "https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js";
+      const CHINA_CDN = "https://cdn.jsdmirror.com/npm/echarts@5.6.0/dist/echarts.min.js";
+      const langs = navigator.languages?.length
+        ? navigator.languages
+        : [navigator.language || ""];
+      const preferChinaCdn = langs.some((lang) => /^zh-CN$/i.test(lang));
+      const source = preferChinaCdn ? CHINA_CDN : GLOBAL_CDN;
+      window.__mushmomEchartsReady = new Promise((resolve) => {
+        if (window.echarts) {
+          resolve();
+          return;
+        }
+
+        const script = document.createElement("script");
+        script.src = source;
+        script.async = true;
+        script.onload = () => {
+          if (window.echarts) resolve();
+        };
+        document.head.appendChild(script);
+      });
+    </script>
     <script src="/load.js" defer></script>
     <script src="/app.js" defer></script>
-    <script>
-      (() => {
-        const sources = [
-          "https://cdn.jsdmirror.com/npm/echarts@5.6.0/dist/echarts.min.js",
-          "https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js",
-        ];
-        const scripts = [];
-        let settled = false;
-
-        sources.forEach((source) => {
-          const script = document.createElement("script");
-          script.src = source;
-          script.async = true;
-          script.onload = () => {
-            if (settled) return;
-            settled = true;
-            scripts.forEach((item) => {
-              if (item !== script && item.parentNode) item.remove();
-            });
-            window.__mushmomEchartsReady?.();
-          };
-          scripts.push(script);
-          document.head.append(script);
-        });
-      })();
-    </script>
   </body>
 </html>

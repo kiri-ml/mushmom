@@ -72,14 +72,7 @@ let activeChart = "timeline";
 let chart;
 let historicalSource = { name: "Unknown", url: null };
 let pendingRender = false;
-const echartsReady = new Promise((resolve) => {
-  if (globalThis.echarts) {
-    resolve();
-    return;
-  }
-
-  globalThis.__mushmomEchartsReady = resolve;
-});
+const echartsReady = globalThis.__mushmomEchartsReady;
 
 function parseTimestamp(value) {
   if (!value) return null;
