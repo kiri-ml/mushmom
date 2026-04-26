@@ -326,6 +326,38 @@ test("timeline candle tooltip uses compact bucket ranges", () => {
   assert.match(tooltip, /^<strong>Apr 24, 2026<br \/>12:00 - 15:59<\/strong><br \/>/);
 });
 
+
+test("weekly candlesticks align to local calendar week boundaries", () => {
+  const { buildCandles } = loadAppTests();
+  const points = [
+    { date: new Date(2024, 11, 29, 12), count: 1200 },
+    { date: new Date(2024, 11, 30, 12), count: 1300 },
+    { date: new Date(2025, 0, 4, 12), count: 1100 },
+    { date: new Date(2025, 0, 5, 12), count: 1400 },
+    { date: new Date(2025, 0, 6, 12), count: 1500 },
+  ];
+
+  const candles = buildCandles(points, { unit: "week", size: 1 });
+
+  const normalizedCandles = candles.map(([time, open, close, low, high]) => ([
+    new Date(time).getFullYear(),
+    new Date(time).getMonth(),
+    new Date(time).getDate(),
+    open,
+    close,
+    low,
+    high,
+  ]));
+
+  assert.equal(
+    JSON.stringify(normalizedCandles),
+    JSON.stringify([
+      [2024, 11, 29, 1200, 1100, 1100, 1300],
+      [2025, 0, 5, 1400, 1500, 1400, 1500],
+    ]),
+  );
+});
+
 test("stats load helper only runs while the document is visible", async () => {
   const { context, getFetchCount, loadStatsWhenVisible } = loadAppTests();
   await Promise.resolve();

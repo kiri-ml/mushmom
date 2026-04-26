@@ -437,9 +437,14 @@ function bucketStart(timestamp, config) {
 
   if (config.unit === "week") {
     const weekStart = startOfLocalWeek(date);
-    const weekMs = 7 * 24 * 60 * 60 * 1000;
-    const epochWeek = Math.floor(weekStart / weekMs);
-    return Math.floor(epochWeek / config.size) * config.size * weekMs;
+
+    if (config.size <= 1) {
+      return weekStart;
+    }
+
+    const anchor = startOfLocalWeek(new Date(0));
+    const weekIndex = Math.floor((weekStart - anchor) / (7 * 24 * 60 * 60 * 1000));
+    return anchor + Math.floor(weekIndex / config.size) * config.size * 7 * 24 * 60 * 60 * 1000;
   }
 
   return timestamp;
@@ -951,6 +956,7 @@ globalThis.__MUSHMOM_TEST__ = {
   getHeatmapVisualBounds,
   getHeatmapPercentileRanks,
   buildDistributionBuckets,
+  buildCandles,
   buildTimelineOptions,
   buildHeatmapOptions,
   buildDistributionOptions,
