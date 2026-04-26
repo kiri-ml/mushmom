@@ -44,15 +44,17 @@ upstream requests.
 ## Deploy
 
 Set `GOOGLE_API_URL` as a Cloudflare Pages secret or environment variable, then
-deploy from the `main` branch for production:
+deploy with Wrangler. Deployments targeting `main` go to production; other
+branches become preview deployments:
 
 ```sh
 npm run deploy
 ```
 
 The deploy script runs `wrangler pages deploy public --project-name mushmom`.
-Cloudflare Pages treats deployments on the configured production branch as
-`Production`; deployments from other branches show up as `Preview`.
+In GitHub Actions, the deploy workflow passes `--branch ${{ github.ref_name }}`
+to Wrangler so `main` stays production and every other pushed branch deploys as
+`Preview`.
 
 The Pages output directory is `public/`, and Pages Functions live under
 `functions/`.
