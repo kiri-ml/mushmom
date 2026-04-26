@@ -4,28 +4,28 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
-const i18nDataJs = fs.readFileSync(path.join(__dirname, "../public/i18n-data.js"), "utf8");
+const i18nJson = fs.readFileSync(path.join(__dirname, "../public/i18n.json"), "utf8");
 const i18nJs = fs.readFileSync(path.join(__dirname, "../public/i18n.js"), "utf8");
 const loadJs = fs.readFileSync(path.join(__dirname, "../public/load.js"), "utf8");
 const appJs = fs.readFileSync(path.join(__dirname, "../public/app.js"), "utf8");
 const indexHtml = fs.readFileSync(path.join(__dirname, "../public/index.html"), "utf8");
-const i18nMessages = loadI18nMessages();
+const { localeRegistry, i18nMessages } = loadI18nData();
 
-function loadI18nMessages() {
-  const context = {};
-  context.window = context;
-  vm.createContext(context);
-  vm.runInContext(i18nDataJs, context);
-  return context.MUSHMOM_I18N_MESSAGES;
+function loadI18nData() {
+  const data = JSON.parse(i18nJson);
+  return {
+    localeRegistry: data.localeRegistry,
+    i18nMessages: data.messages,
+  };
 }
 
 function loadAppTests() {
   let fetchCount = 0;
-  let currentLang = "en";
+  let currentLang = "en-US";
   const windowListeners = new Map();
   const renderedOptions = [];
   const translate = (key, params = {}) => {
-    const template = i18nMessages[currentLang]?.[key] ?? i18nMessages.en[key] ?? key;
+    const template = i18nMessages[currentLang]?.[key] ?? i18nMessages["en-US"]?.[key] ?? key;
     return String(template).replace(/\{([^{}]+)\}/g, (match, name) => (
       Object.prototype.hasOwnProperty.call(params, name) ? String(params[name]) : match
     ));
@@ -38,6 +38,7 @@ function loadAppTests() {
     append() {},
     addEventListener() {},
   });
+  const i18nData = { localeRegistry, messages: i18nMessages };
   const context = {
     console,
     Date,
@@ -53,6 +54,8 @@ function loadAppTests() {
     clearTimeout,
     __mushmomEchartsReady: Promise.resolve(),
     MushmomI18n: {
+      ready: Promise.resolve(),
+      t: translate,
       getCurrentLang: () => currentLang,
       setLang: (lang) => {
         currentLang = lang;
@@ -122,10 +125,11 @@ function loadAppTests() {
 
 function loadI18nTests(options = {}) {
   const {
-    languages = ["en"],
-    language = languages[0] || "en",
+    languages = ["en-US"],
+    language = languages[0] || "en-US",
     storedLang = null,
   } = options;
+  const i18nData = { localeRegistry, messages: i18nMessages };
   const note = {
     textContent: "",
     dataset: { i18nTimezoneNote: "details.localTimezone" },
@@ -143,7 +147,11 @@ function loadI18nTests(options = {}) {
   };
   const selector = {
     value: "",
+    options: [],
     addEventListener() {},
+    replaceChildren(...children) {
+      this.options = children.flatMap((child) => child.children || [child]);
+    },
   };
   const storage = new Map();
   if (storedLang != null) storage.set("mushmom.lang", storedLang);
@@ -168,6 +176,17 @@ function loadI18nTests(options = {}) {
         if (selectorText === "[data-i18n-aria-label]") return [ariaElement];
         return [];
       },
+      createDocumentFragment: () => ({
+        children: [],
+        append(child) {
+          this.children.push(child);
+        },
+      }),
+      createElement: (tagName) => ({
+        tagName,
+        value: "",
+        textContent: "",
+      }),
       addEventListener() {},
     },
     localStorage: {
@@ -178,12 +197,22 @@ function loadI18nTests(options = {}) {
     },
     navigator: { languages, language },
     dispatchEvent() {},
+    fetch: async (url) => {
+      if (url !== "/i18n.json") {
+        throw new Error(`Unexpected fetch url: ${url}`);
+      }
+
+      return {
+        ok: true,
+        json: async () => i18nData,
+      };
+    },
   };
 
   context.window = context;
+  context.window.fetch = context.fetch;
   context.globalThis = context;
   vm.createContext(context);
-  vm.runInContext(i18nDataJs, context);
   vm.runInContext(i18nJs, context);
 
   return {
@@ -202,68 +231,108 @@ test("toolbar defaults to 7d and no longer exposes 24h", () => {
   assert.match(indexHtml, /class="is-active" data-range="7d"/);
 });
 
-test("language selector exposes every supported language", () => {
-  const expectedOptions = [
-    ["en", "English"],
-    ["zh-CN", "简体中文"],
-    ["zh-TW", "繁體中文"],
-    ["ko", "한국어"],
-    ["es", "Español"],
-    ["pt-BR", "Português"],
-    ["ja", "日本語"],
-    ["nl", "Nederlands"],
+test("language selector options are generated from the shared locale registry", async () => {
+  assert.match(indexHtml, /<select[\s\S]*id="language-select"[\s\S]*><\/select>/);
+  assert.doesNotMatch(indexHtml, /<option value=/);
+  assert.match(i18nJson, /"localeRegistry": \[/);
+  assert.match(i18nJs, /const dataUrl = "\/i18n\.json";/);
+  assert.match(i18nJs, /function getSupportedLocales\(\) \{/);
+
+  const { i18n, selector } = loadI18nTests({ languages: ["en-US"] });
+  await i18n.loadI18nData();
+  i18n.renderLanguageSelector();
+
+  const rendered = selector.options.map((option) => [option.value, option.textContent]);
+  const expected = localeRegistry
+    .filter(({ code }) => i18nMessages[code])
+    .map(({ code, label }) => [code, label]);
+
+  assert.equal(JSON.stringify(rendered), JSON.stringify(expected));
+});
+
+test("i18n normalizes saved and browser languages from the shared locale registry", async () => {
+  const { i18n: zhCnI18n } = loadI18nTests({ languages: ["fr-FR"], storedLang: "zh-Hans" });
+  await zhCnI18n.loadI18nData();
+  assert.equal(zhCnI18n.getCurrentLang(), "zh-Hans");
+
+  const { i18n: zhTwI18n } = loadI18nTests({ storedLang: "zh-HK" });
+  await zhTwI18n.loadI18nData();
+  assert.equal(zhTwI18n.getCurrentLang(), "zh-Hant");
+
+  const { i18n } = loadI18nTests({ languages: ["fr-FR", "pt-PT", "ja-JP"] });
+  await i18n.loadI18nData();
+
+  const aliasExpectations = [
+    ["zh", "zh-Hans"],
+    ["zh-Hans", "zh-Hans"],
+    ["zh-SG", "zh-Hans"],
+    ["zh-MY", "zh-Hans"],
+    ["zh-ID", "zh-Hans"],
+    ["zh-HK", "zh-Hant"],
+    ["zh-MO", "zh-Hant"],
+    ["ko-KR", "ko-KR"],
+    ["es-MX", "es-ES"],
+    ["pt", "pt-BR"],
+    ["pt-PT", "pt-BR"],
+    ["ja-JP", "ja-JP"],
+    ["nl-BE", "nl-NL"],
+    ["en-GB", "en-US"],
+    ["fr-FR", "en-US"],
   ];
 
-  expectedOptions.forEach(([value, label]) => {
-    assert.match(indexHtml, new RegExp(`<option value="${value}">${label}</option>`));
+  aliasExpectations.forEach(([input, expected]) => {
+    assert.equal(i18n.normalizeLang(input), expected, input);
+  });
+
+  assert.equal(i18n.getCurrentLang(), "pt-BR");
+
+  i18n.localeRegistry.forEach((locale) => {
+    assert.equal(i18n.getLocaleConfig(locale.code)?.label, locale.label);
+    assert.equal(i18n.getLocaleConfig(locale.code)?.documentLang, locale.documentLang);
+    for (const alias of locale.aliases || []) {
+      const sample = alias.endsWith("*") ? `${alias.slice(0, -1)}test` : alias;
+      if (i18nMessages[locale.code]) {
+        assert.equal(i18n.normalizeLang(sample), locale.code, `${sample} -> ${locale.code}`);
+      }
+    }
   });
 });
 
-test("i18n normalizes saved and browser languages to supported locales", () => {
-  const { i18n: zhCnI18n } = loadI18nTests({ languages: ["fr-FR"], storedLang: "zh-Hans" });
-  assert.equal(zhCnI18n.getCurrentLang(), "zh-CN");
-
-  const { i18n: zhTwI18n } = loadI18nTests({ storedLang: "zh-HK" });
-  assert.equal(zhTwI18n.getCurrentLang(), "zh-TW");
-
-  const { i18n } = loadI18nTests({ languages: ["fr-FR", "pt-PT", "ja-JP"] });
-  assert.equal(i18n.normalizeLang("zh"), "zh-CN");
-  assert.equal(i18n.normalizeLang("zh-CN"), "zh-CN");
-  assert.equal(i18n.normalizeLang("zh-SG"), "zh-CN");
-  assert.equal(i18n.normalizeLang("zh-Hans"), "zh-CN");
-  assert.equal(i18n.normalizeLang("zh-TW"), "zh-TW");
-  assert.equal(i18n.normalizeLang("zh-HK"), "zh-TW");
-  assert.equal(i18n.normalizeLang("zh-MO"), "zh-TW");
-  assert.equal(i18n.normalizeLang("zh-Hant"), "zh-TW");
-  assert.equal(i18n.normalizeLang("ko-KR"), "ko");
-  assert.equal(i18n.normalizeLang("es-MX"), "es");
-  assert.equal(i18n.normalizeLang("pt"), "pt-BR");
-  assert.equal(i18n.normalizeLang("pt-PT"), "pt-BR");
-  assert.equal(i18n.normalizeLang("ja-JP"), "ja");
-  assert.equal(i18n.normalizeLang("nl-BE"), "nl");
-  assert.equal(i18n.normalizeLang("fr-FR"), "en");
-  assert.equal(i18n.getCurrentLang(), "pt-BR");
-});
-
-test("i18n applies static text, attributes, selector value, and English fallback", () => {
+test("i18n applies static text, attributes, selector value, and English fallback", async () => {
   const { ariaElement, documentElement, i18n, selector, textElement } = loadI18nTests({
     languages: ["nl-NL"],
   });
 
+  await i18n.loadI18nData();
+  i18n.renderLanguageSelector();
   i18n.applyI18n();
-  assert.equal(documentElement.lang, "nl");
-  assert.equal(textElement.textContent, i18nMessages.nl["chartView.heatmap"]);
-  assert.equal(ariaElement.attrs["aria-label"], i18nMessages.nl["language.label"]);
-  assert.equal(selector.value, "nl");
+  assert.equal(documentElement.lang, "nl-NL");
+  assert.equal(textElement.textContent, i18nMessages["nl-NL"]["chartView.heatmap"]);
+  assert.equal(ariaElement.attrs["aria-label"], i18nMessages["nl-NL"]["language.label"]);
+  assert.equal(selector.value, "nl-NL");
 
-  delete i18n.messages.nl["chartView.heatmap"];
-  assert.equal(i18n.t("chartView.heatmap", {}, "nl"), i18nMessages.en["chartView.heatmap"]);
+  delete i18n.messages["nl-NL"]["chartView.heatmap"];
+  assert.equal(i18n.t("chartView.heatmap", {}, "nl-NL"), i18nMessages["en-US"]["chartView.heatmap"]);
+});
+
+test("i18n preserves server-rendered text and attributes when translations are unavailable", () => {
+  const { ariaElement, documentElement, i18n, textElement } = loadI18nTests();
+
+  textElement.textContent = "Heatmap";
+  ariaElement.attrs["aria-label"] = "Select language";
+
+  i18n.applyI18n("en-US");
+
+  assert.equal(documentElement.lang, "en-US");
+  assert.equal(textElement.textContent, "Heatmap");
+  assert.equal(ariaElement.attrs["aria-label"], "Select language");
+  assert.equal(i18n.t("chartView.heatmap", {}, "en-US"), "chartView.heatmap");
 });
 
 test("echarts loader chooses one cdn from the user language", () => {
   assert.match(indexHtml, /const GLOBAL_CDN = "https:\/\/cdn\.jsdelivr\.net\/npm\/echarts@5\.6\.0\/dist\/echarts\.min\.js";/);
   assert.match(indexHtml, /const CHINA_CDN = "https:\/\/cdn\.jsdmirror\.com\/npm\/echarts@5\.6\.0\/dist\/echarts\.min\.js";/);
-  assert.match(indexHtml, /const preferChinaCdn = langs\.some\(\(lang\) => \/\^zh-CN\$\/i\.test\(lang\)\);/);
+  assert.match(indexHtml, /const preferChinaCdn =\s*isChinaStandardTime \|\| langs\.some\(\(lang\) => \/-CN\$\/i\.test\(lang\)\);/);
   assert.match(indexHtml, /const source = preferChinaCdn \? CHINA_CDN : GLOBAL_CDN;/);
   assert.match(indexHtml, /window\.__mushmomEchartsReady = new Promise\(\(resolve\) => \{/);
   assert.match(indexHtml, /script\.src = source;/);
@@ -466,12 +535,12 @@ test("timeline axis labels rerender with the selected locale", async () => {
   const points = [{ date: new Date(timestamp), count: 1200 }];
 
   setCurrentRangeForTest("7d");
-  setLangForTest("en");
+  setLangForTest("en-US");
   const englishOptions = buildTimelineOptions(points);
   assert.match(englishOptions.xAxis.axisLabel.formatter(timestamp), /^Apr 24\n12:00$/);
   assert.equal(englishOptions.tooltip.valueFormatter(1200), "1,200");
 
-  setLangForTest("zh-CN");
+  setLangForTest("zh-Hans");
   const chineseOptions = buildTimelineOptions(points);
   assert.match(chineseOptions.xAxis.axisLabel.formatter(timestamp), /^4月24日\n12:00$/);
   setCurrentRangeForTest("28d");
@@ -487,7 +556,7 @@ test("timeline axis labels rerender with the selected locale", async () => {
   await Promise.resolve();
   await Promise.resolve();
   renderedOptions.length = 0;
-  dispatchLanguageChange("zh-CN");
+  dispatchLanguageChange("zh-Hans");
   await Promise.resolve();
   await Promise.resolve();
 
@@ -496,7 +565,7 @@ test("timeline axis labels rerender with the selected locale", async () => {
   assert.match(rendered.xAxis.axisLabel.formatter(timestamp), /^4月24日$/);
 });
 
-test("expanded locales drive chart labels, tooltips, numbers, dates, and weekdays", async () => {
+test("expanded locale registry entries drive chart labels, tooltips, numbers, dates, and weekdays", async () => {
   const {
     buildDistributionOptions,
     buildHeatmapOptions,
@@ -522,14 +591,14 @@ test("expanded locales drive chart labels, tooltips, numbers, dates, and weekday
     weekday: "short",
   }).format(weekdayDate);
 
-  setLangForTest("es");
+  setLangForTest("es-ES");
   setCurrentRangeForTest("7d");
   const timelineOptions = buildTimelineOptions([{ date, count: 1234567 }]);
-  assert.equal(timelineOptions.series[0].name, i18nMessages.es["chart.series.players"]);
-  assert.equal(timelineOptions.tooltip.valueFormatter(1234567), (1234567).toLocaleString("es"));
+  assert.equal(timelineOptions.series[0].name, i18nMessages["es-ES"]["chart.series.players"]);
+  assert.equal(timelineOptions.tooltip.valueFormatter(1234567), (1234567).toLocaleString("es-ES"));
   assert.equal(
     timelineOptions.xAxis.axisLabel.formatter(timestamp),
-    `${shortDateFormat("es")}\n${timeFormat("es")}`,
+    `${shortDateFormat("es-ES")}\n${timeFormat("es-ES")}`,
   );
 
   setCurrentRangeForTest("28d");
@@ -543,7 +612,7 @@ test("expanded locales drive chart labels, tooltips, numbers, dates, and weekday
     { date: new Date(2026, 3, 19, 12), count: 1000 },
     { date: new Date(2026, 3, 20, 12), count: 1200 },
   ]);
-  assert.equal(heatmapOptions.yAxis.data[0], weekdayFormat("es", new Date(2026, 0, 4, 12)));
+  assert.equal(heatmapOptions.yAxis.data[0], weekdayFormat("es-ES", new Date(2026, 0, 4, 12)));
   assert.match(
     heatmapOptions.tooltip.formatter({ value: heatmapOptions.series[0].data[0] }),
     new RegExp(`^<strong>${heatmapOptions.yAxis.data[0]} `),
@@ -553,7 +622,7 @@ test("expanded locales drive chart labels, tooltips, numbers, dates, and weekday
     { date, count: 1000 },
     { date: new Date(timestamp + 60 * 60 * 1000), count: 1500 },
   ]);
-  assert.equal(distributionOptions.series[0].name, i18nMessages.es["chart.series.samplesPercent"]);
+  assert.equal(distributionOptions.series[0].name, i18nMessages["es-ES"]["chart.series.samplesPercent"]);
   assert.match(distributionOptions.tooltip.formatter([{ dataIndex: 10, value: 50 }]), /muestras/);
 
   await Promise.resolve();
@@ -561,25 +630,26 @@ test("expanded locales drive chart labels, tooltips, numbers, dates, and weekday
   setActiveChartForTest("timeline");
   setCurrentRangeForTest("7d");
   renderedOptions.length = 0;
-  dispatchLanguageChange("ja");
+  dispatchLanguageChange("ja-JP");
   await Promise.resolve();
   await Promise.resolve();
 
   assert.ok(renderedOptions.length > 0);
   const rendered = renderedOptions.at(-1);
-  assert.equal(rendered.series[0].name, i18nMessages.ja["chart.series.players"]);
+  assert.equal(rendered.series[0].name, i18nMessages["ja-JP"]["chart.series.players"]);
   assert.equal(
     rendered.xAxis.axisLabel.formatter(timestamp),
-    `${shortDateFormat("ja")}\n${timeFormat("ja")}`,
+    `${shortDateFormat("ja-JP")}\n${timeFormat("ja-JP")}`,
   );
 });
 
-test("i18n renders the details timezone note with localized native timezone names", () => {
+test("i18n renders the details timezone note with localized native timezone names", async () => {
   const { i18n, note } = loadI18nTests();
+  await i18n.loadI18nData();
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const expectedTimeZoneName = (locale) => {
     if (!timeZone) {
-      return locale === "zh-CN" ? "你的本地时区" : "your local timezone";
+      return locale === "zh-Hans" ? "你的本地时区" : "your local timezone";
     }
 
     return (
@@ -589,17 +659,17 @@ test("i18n renders the details timezone note with localized native timezone name
     );
   };
 
-  i18n.applyI18n("en");
+  i18n.applyI18n("en-US");
 
-  assert.equal(note.textContent, `Times shown in ${expectedTimeZoneName("en")}.`);
-  assert.equal(i18n.formatTimeZoneName("zh-CN"), expectedTimeZoneName("zh-CN"));
+  assert.equal(note.textContent, `Times shown in ${expectedTimeZoneName("en-US")}.`);
+  assert.equal(i18n.formatTimeZoneName("zh-Hans"), expectedTimeZoneName("zh-Hans"));
 
-  i18n.applyI18n("zh-CN");
-  assert.equal(note.textContent, `时间以${expectedTimeZoneName("zh-CN")}显示。`);
+  i18n.applyI18n("zh-Hans");
+  assert.equal(note.textContent, `时间以${expectedTimeZoneName("zh-Hans")}显示。`);
 
-  i18n.applyI18n("en");
-  i18n.setLang("zh-CN");
-  assert.equal(note.textContent, `时间以${expectedTimeZoneName("zh-CN")}显示。`);
+  i18n.applyI18n("en-US");
+  i18n.setLang("zh-Hans");
+  assert.equal(note.textContent, `时间以${expectedTimeZoneName("zh-Hans")}显示。`);
 });
 
 test("removed chart tabs stay removed from the UI", () => {
@@ -693,12 +763,12 @@ test("heatmap weekday labels rerender with the selected locale", async () => {
     { date: new Date(2026, 3, 20, 12), count: 1200 },
   ];
 
-  setLangForTest("en");
+  setLangForTest("en-US");
   const englishOptions = buildHeatmapOptions(points);
   assert.equal(englishOptions.yAxis.data[0], "Sun");
   assert.match(englishOptions.tooltip.formatter({ value: englishOptions.series[0].data[0] }), /^<strong>Sun /);
 
-  setLangForTest("zh-CN");
+  setLangForTest("zh-Hans");
   const chineseOptions = buildHeatmapOptions(points);
   assert.equal(chineseOptions.yAxis.data[0], "周日");
   assert.match(chineseOptions.tooltip.formatter({ value: chineseOptions.series[0].data[0] }), /^<strong>周日 /);
@@ -707,7 +777,7 @@ test("heatmap weekday labels rerender with the selected locale", async () => {
   await Promise.resolve();
   setActiveChartForTest("heatmap");
   renderedOptions.length = 0;
-  dispatchLanguageChange("zh-CN");
+  dispatchLanguageChange("zh-Hans");
   await Promise.resolve();
   await Promise.resolve();
 

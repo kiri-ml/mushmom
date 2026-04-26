@@ -75,13 +75,24 @@ let currentStatus = { kind: "loading", key: "status.loading", params: {} };
 let pendingRender = false;
 const echartsReady = globalThis.__mushmomEchartsReady;
 
+function whenAppReady() {
+  return Promise.all([
+    echartsReady,
+    globalThis.MushmomI18n?.ready || Promise.resolve(),
+  ]);
+}
+
+function getI18n() {
+  return globalThis.MushmomI18n || null;
+}
+
 function tr(key, params = {}) {
-  const translate = globalThis.t;
+  const translate = getI18n()?.t;
   return typeof translate === "function" ? translate(key, params) : key;
 }
 
 function getCurrentLocale() {
-  const getCurrentLang = globalThis.MushmomI18n?.getCurrentLang;
+  const getCurrentLang = getI18n()?.getCurrentLang;
   return typeof getCurrentLang === "function" ? getCurrentLang() : undefined;
 }
 
@@ -825,7 +836,7 @@ function render() {
   if (pendingRender) return;
   pendingRender = true;
 
-  echartsReady.then(() => {
+  whenAppReady().then(() => {
     pendingRender = false;
     renderChart();
   });
