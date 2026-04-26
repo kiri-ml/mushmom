@@ -132,7 +132,10 @@
       const langs = navigator.languages?.length
         ? navigator.languages
         : [navigator.language || ""];
-      const preferChinaCdn = langs.some((lang) => /^zh-CN$/i.test(lang));
+      const isChinaStandardTime =
+        Intl.DateTimeFormat().resolvedOptions().timeZone === "Asia/Shanghai";
+      const preferChinaCdn =
+        isChinaStandardTime || langs.some((lang) => /-CN$/i.test(lang));
       const source = preferChinaCdn ? CHINA_CDN : GLOBAL_CDN;
       window.__mushmomEchartsReady = new Promise((resolve) => {
         if (window.echarts) {
