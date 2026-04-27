@@ -41,7 +41,7 @@
       manifest,
     });
 
-    loadArchiveChunks({
+    return loadArchiveChunks({
       archiveBaseUrl,
       fetcher,
       latestPayload,
@@ -50,6 +50,7 @@
       onArchive,
     }).catch((error) => {
       console.warn(error);
+      throw error;
     });
   }
 

@@ -463,6 +463,147 @@ test("normalization truncates source timestamps to seconds", () => {
   assert.equal(points[0].date.toISOString(), "2026-04-23T12:00:03.000Z");
 });
 
+test("status stays loading until archives finish loading", async () => {
+  const statusHistory = [];
+  let resolveArchive = null;
+  let archiveFetchStarted = false;
+  const currentElement = {
+    textContent: "",
+    disabled: false,
+    dataset: {},
+    classList: { toggle() {} },
+    append() {},
+    addEventListener() {},
+  };
+  const statusDot = {
+    classList: { toggle() {} },
+  };
+  const statusText = {
+    _value: "",
+    get textContent() {
+      return this._value;
+    },
+    set textContent(value) {
+      this._value = value;
+      statusHistory.push(value);
+    },
+  };
+  const stubElement = () => ({
+    textContent: "",
+    disabled: false,
+    dataset: {},
+    classList: { toggle() {} },
+    append() {},
+    addEventListener() {},
+  });
+  const context = {
+    console,
+    Date,
+    Intl,
+    Math,
+    Number,
+    String,
+    Array,
+    Object,
+    Map,
+    Promise,
+    URL,
+    setTimeout,
+    clearTimeout,
+    __mushmomEchartsReady: Promise.resolve(),
+    MushmomI18n: {
+      ready: Promise.resolve(),
+      t: (key) => ({
+        "status.loading": "LOADING",
+        "status.ready": "READY",
+        "status.failed": "FAILED",
+        "error.currentUserMissingCount": "missing",
+      }[key] ?? key),
+      getCurrentLang: () => "en-US",
+      setLang: (lang) => lang,
+    },
+    fetch: async (url) => {
+      if (url === "/api/stats/latest") {
+        return {
+          ok: true,
+          json: async () => ({
+            source: "Test Source",
+            data: [[1776945603, 1459]],
+          }),
+        };
+      }
+      if (url === "/assets/stats/manifests.json") {
+        return {
+          ok: true,
+          json: async () => ({
+            chunks: [{ file: "2026-03.json", end: 1775000000 }],
+          }),
+        };
+      }
+      if (url === "/assets/stats/2026-03.json") {
+        archiveFetchStarted = true;
+        return {
+          ok: true,
+          json: async () => new Promise((resolve) => {
+            resolveArchive = () => resolve({ data: [[1774000000, 1400]] });
+          }),
+        };
+      }
+      if (url === "/api/current") {
+        return {
+          ok: true,
+          json: async () => ({ usercount: 1459 }),
+        };
+      }
+      throw new Error(`Unexpected fetch url: ${url}`);
+    },
+    echarts: {
+      init: () => ({
+        setOption() {},
+        resize() {},
+      }),
+    },
+    document: {
+      visibilityState: "visible",
+      querySelector: (selector) => {
+        if (selector === "#status-dot") return statusDot;
+        if (selector === "#status-text") return statusText;
+        if (selector === "#current-count") return currentElement;
+        return stubElement();
+      },
+      querySelectorAll: () => [],
+      createElement: () => stubElement(),
+      addEventListener() {},
+    },
+    window: {
+      addEventListener() {},
+      setInterval() {},
+      location: { origin: "https://mushmom.test" },
+    },
+  };
+
+  context.window.window = context.window;
+  context.window.globalThis = context;
+  context.globalThis = context;
+
+  const vm = require("node:vm");
+  vm.createContext(context);
+  vm.runInContext(loadJs, context);
+  vm.runInContext(appJs, context);
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(archiveFetchStarted, true);
+  assert.equal(statusHistory.at(-1), "LOADING");
+  assert.equal(statusHistory.includes("READY"), false);
+  assert.equal(typeof resolveArchive, "function");
+
+  resolveArchive();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(statusHistory.at(-1), "READY");
+});
+
 test("archive selection skips chunks overlapping latest payload", () => {
   const { selectArchiveChunks } = loadAppTests();
   const chunks = selectArchiveChunks(

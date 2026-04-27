@@ -896,7 +896,7 @@ async function fetchCurrentUserCount() {
 async function loadStats() {
   const hadHistoricalData = allPoints.length > 0;
 
-  if (!hadHistoricalData) setStatus("loading", "status.loading");
+  setStatus("loading", "status.loading");
 
   const [statsResult, currentResult] = await Promise.allSettled([
     fetchHistoricalStats(),
