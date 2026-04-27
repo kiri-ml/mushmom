@@ -922,11 +922,6 @@ async function loadStats() {
   render();
 }
 
-function loadStatsWhenVisible() {
-  if (document.visibilityState === "hidden") return;
-  loadStats();
-}
-
 rangeButtons.forEach((button) => {
   button.addEventListener("click", () => {
     currentRange = button.dataset.range;
@@ -955,7 +950,7 @@ window.addEventListener("mushmom:languagechange", () => {
   render();
 });
 
-loadStatsWhenVisible();
+loadStats();
 
 globalThis.__MUSHMOM_TEST__ = {
   normalizePayload,
@@ -971,7 +966,6 @@ globalThis.__MUSHMOM_TEST__ = {
   buildTimelineOptions,
   buildHeatmapOptions,
   buildDistributionOptions,
-  loadStatsWhenVisible,
   setCurrentRangeForTest: (range) => {
     currentRange = range;
   },

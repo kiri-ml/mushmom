@@ -439,25 +439,6 @@ test("weekly candlesticks align to local calendar week boundaries", () => {
   );
 });
 
-test("stats load helper only runs while the document is visible", async () => {
-  const { context, getFetchCount, loadStatsWhenVisible } = loadAppTests();
-  await Promise.resolve();
-  await Promise.resolve();
-
-  assert.equal(getFetchCount(), 3);
-
-  context.document.visibilityState = "hidden";
-  loadStatsWhenVisible();
-  await Promise.resolve();
-  assert.equal(getFetchCount(), 3);
-
-  context.document.visibilityState = "visible";
-  loadStatsWhenVisible();
-  await Promise.resolve();
-  await Promise.resolve();
-  assert.equal(getFetchCount(), 6);
-});
-
 test("normalization accepts compact epoch-second rows", () => {
   const { normalizePayload } = loadAppTests();
   const points = normalizePayload({
