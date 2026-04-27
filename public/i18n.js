@@ -1,10 +1,25 @@
 (() => {
   const fallbackLang = "en-US";
+  const fallbackMessages = {
+    [fallbackLang]: {
+      "status.loading": "LOADING",
+      "status.ready": "READY",
+      "status.failed": "FAILED",
+    },
+  };
   const storageKey = "mushmom.lang";
   const dataUrl = "/i18n.json";
 
+  function cloneFallbackMessages() {
+    return {
+      [fallbackLang]: {
+        ...fallbackMessages[fallbackLang],
+      },
+    };
+  }
+
   const state = {
-    messages: { [fallbackLang]: {} },
+    messages: cloneFallbackMessages(),
     localeRegistry: [{ code: fallbackLang, label: fallbackLang, aliases: [fallbackLang], documentLang: fallbackLang }],
     localeLabels: { [fallbackLang]: fallbackLang },
     localeByCode: {},
@@ -39,8 +54,15 @@
 
   function setI18nData(data = {}) {
     const messages = data.messages && typeof data.messages === "object"
-      ? data.messages
-      : { [fallbackLang]: {} };
+      ? {
+          ...cloneFallbackMessages(),
+          ...data.messages,
+          [fallbackLang]: {
+            ...fallbackMessages[fallbackLang],
+            ...(data.messages[fallbackLang] || {}),
+          },
+        }
+      : cloneFallbackMessages();
     const localeRegistry = Array.isArray(data.localeRegistry) && data.localeRegistry.length > 0
       ? data.localeRegistry
       : [{ code: fallbackLang, label: fallbackLang, aliases: [fallbackLang], documentLang: fallbackLang }];
@@ -129,7 +151,13 @@
 
   function t(key, params = {}, lang = getCurrentLang()) {
     const normalized = normalizeLang(lang);
-    const value = state.messages[normalized]?.[key] ?? state.messages[fallbackLang]?.[key] ?? key;
+    const fallbackValue = state.messages[fallbackLang]?.[key];
+    const value = state.messages[normalized]?.[key] ?? fallbackValue ?? key;
+
+    if (value === key && typeof fallbackValue === "string") {
+      return interpolate(fallbackValue, params);
+    }
+
     return interpolate(value, params);
   }
 

@@ -333,6 +333,14 @@ test("i18n preserves server-rendered text and attributes when translations are u
   assert.equal(i18n.t("chartView.heatmap", {}, "en-US"), "chartView.heatmap");
 });
 
+test("i18n falls back to English status labels before messages are loaded", () => {
+  const { i18n } = loadI18nTests();
+
+  ["status.loading", "status.ready", "status.failed"].forEach((key) => {
+    assert.equal(i18n.t(key, {}, "en-US"), i18nMessages["en-US"][key]);
+  });
+});
+
 test("echarts loader chooses one cdn from the user language", () => {
   assert.match(indexHtml, /const GLOBAL_CDN = "https:\/\/cdn\.jsdelivr\.net\/npm\/echarts@5\.6\.0\/dist\/echarts\.min\.js";/);
   assert.match(indexHtml, /const CHINA_CDN = "https:\/\/cdn\.jsdmirror\.com\/npm\/echarts@5\.6\.0\/dist\/echarts\.min\.js";/);
