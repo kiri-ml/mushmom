@@ -277,14 +277,18 @@ test("i18n normalizes saved and browser languages from the shared locale registr
     ["ja-JP", "ja-JP"],
     ["nl-BE", "nl-NL"],
     ["en-GB", "en-US"],
-    ["fr-FR", "en-US"],
+    ["it-IT", "en-US"],
+    ["ru-RU", "en-US"],
+    ["th-TH", "en-US"],
+    ["de-DE", "de-DE"],
+    ["fr-FR", "fr-FR"],
   ];
 
   aliasExpectations.forEach(([input, expected]) => {
     assert.equal(i18n.normalizeLang(input), expected, input);
   });
 
-  assert.equal(i18n.getCurrentLang(), "pt-BR");
+  assert.equal(i18n.getCurrentLang(), "fr-FR");
 
   i18n.localeRegistry.forEach((locale) => {
     assert.equal(i18n.getLocaleConfig(locale.code)?.label, locale.label);
