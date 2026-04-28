@@ -15,6 +15,14 @@ async function main() {
   }
 
   const payload = await readJson(source);
+  const { chunks } = generateArchive(payload, outputDir);
+
+  console.log(
+    `Generated ${chunks.length} stats archive chunks in ${path.relative(process.cwd(), outputDir)}`,
+  );
+}
+
+function generateArchive(payload, outputDir) {
   const rows = extractRows(payload)
     .map(compactRow)
     .filter((row) => row !== null)
@@ -27,33 +35,27 @@ async function main() {
   const latest = new Date(rows[0][0] * 1000);
   const latestYear = latest.getUTCFullYear();
   const latestMonth = latest.getUTCMonth() + 1;
+  const initialName = previousMonthName(latestYear, latestMonth);
   const chunks = buildChunks(rows, latestYear, latestMonth);
+  const initialChunk = findChunk(chunks, initialName) || buildMonthChunk(rows, initialName);
+  const archiveFiles = mergeChunks(chunks, initialChunk);
 
   fs.mkdirSync(outputDir, { recursive: true });
 
-  const manifestChunks = chunks.map(({ name, rows: chunkRows }) => ({
-    file: `${name}.json`,
-    period: name,
-    start: chunkRows.at(-1)[0],
-    end: chunkRows[0][0],
-    rows: chunkRows.length,
-  }));
-  const latestArchivedSample = manifestChunks.reduce(
-    (latestEnd, chunk) => Math.max(latestEnd, chunk.end),
-    Number.NEGATIVE_INFINITY,
-  );
+  const manifestBackfill = chunks
+    .filter((chunk) => chunk.name !== initialName)
+    .map(toManifestChunk);
+  const manifestInitial = toManifestChunk(initialChunk);
   const manifest = {
-    latestArchivedSampleAt: Number.isFinite(latestArchivedSample)
-      ? new Date(latestArchivedSample * 1000).toISOString()
-      : null,
     output: {
       rowShape: ["epochSeconds", "usercount"],
       order: "newest-first",
     },
-    chunks: manifestChunks,
+    initial: manifestInitial,
+    backfill: manifestBackfill,
   };
 
-  for (const chunk of chunks) {
+  for (const chunk of archiveFiles) {
     writeJson(path.join(outputDir, `${chunk.name}.json`), {
       period: chunk.name,
       data: chunk.rows,
@@ -62,9 +64,7 @@ async function main() {
 
   writeJson(path.join(outputDir, "manifests.json"), manifest);
 
-  console.log(
-    `Generated ${chunks.length} stats archive chunks in ${path.relative(process.cwd(), outputDir)}`,
-  );
+  return { manifest, chunks: archiveFiles };
 }
 
 function parseArgs(args) {
@@ -89,7 +89,7 @@ function parseArgs(args) {
 }
 
 function printHelp() {
-  console.log(`Usage: node scripts/generate_stats_archive.js [options]
+  console.log(`Usage: node scripts/generate_stats_archive.cjs [options]
 
 Options:
   --source <url-or-file>   Stats JSON source. Defaults to GOOGLE_API_URL or .dev.vars.
@@ -183,8 +183,43 @@ function buildChunks(rows, latestYear, latestMonth) {
   }
 
   return [...groups.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
+    .sort(([a], [b]) => b.localeCompare(a))
     .map(([name, chunkRows]) => ({ name, rows: chunkRows }));
+}
+
+function previousMonthName(latestYear, latestMonth) {
+  const date = new Date(Date.UTC(latestYear, latestMonth - 2, 1));
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+function buildMonthChunk(rows, name) {
+  const chunkRows = rows.filter((row) => monthNameForRow(row) === name);
+  return { name, rows: chunkRows };
+}
+
+function monthNameForRow(row) {
+  const date = new Date(row[0] * 1000);
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+function findChunk(chunks, name) {
+  return chunks.find((chunk) => chunk.name === name) || null;
+}
+
+function mergeChunks(chunks, chunk) {
+  if (findChunk(chunks, chunk.name)) return chunks;
+
+  return [...chunks, chunk].sort((a, b) => b.name.localeCompare(a.name));
+}
+
+function toManifestChunk({ name, rows }) {
+  return {
+    file: `${name}.json`,
+    period: name,
+    start: rows.at(-1)?.[0] ?? null,
+    end: rows[0]?.[0] ?? null,
+    rows: rows.length,
+  };
 }
 
 function writeJson(filePath, value) {
@@ -195,7 +230,15 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : error);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : error);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  buildChunks,
+  generateArchive,
+  previousMonthName,
+};

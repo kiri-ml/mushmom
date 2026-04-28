@@ -4,14 +4,22 @@
   "private": true,
   "description": "MapleLegends population statistics dashboard for Cloudflare Pages.",
   "scripts": {
-    "dev": "wrangler pages dev public",
-    "test": "node --test",
-    "build": "node scripts/build.js",
-    "generate:stats-archive": "node scripts/generate_stats_archive.js",
-    "preview": "wrangler pages dev public",
-    "deploy": "wrangler pages deploy public --project-name mushmom"
+    "dev": "node scripts/dev.cjs",
+    "dev:vite": "vite",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "build": "vite build",
+    "check": "npm run test && npm run typecheck && npm run build",
+    "generate:stats-archive": "node scripts/generate_stats_archive.cjs",
+    "preview": "vite preview",
+    "deploy": "wrangler pages deploy dist --project-name mushmom"
   },
   "devDependencies": {
+    "@types/node": "^25.6.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.1.12",
+    "vitest": "^4.1.5",
     "wrangler": "^4.85.0"
-  }
+  },
+  "type": "module"
 }

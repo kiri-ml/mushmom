@@ -6,9 +6,13 @@ on:
       - '**'
   workflow_dispatch:
   workflow_call:
+    inputs:
+      ref:
+        required: false
+        type: string
 
 concurrency:
-  group: deploy-${{ github.ref_name }}
+  group: deploy-${{ inputs.ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
@@ -21,6 +25,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.ref_name }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -31,11 +37,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run tests
-        run: npm test
-
-      - name: Build
-        run: npm run build
+      - name: Verify app
+        run: npm run check
 
       - name: Deploy
         uses: cloudflare/wrangler-action@v3
@@ -43,5 +46,5 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: >-
-            pages deploy public --project-name mushmom
-            --branch ${{ github.ref_name }}
+            pages deploy dist --project-name mushmom
+            --branch ${{ inputs.ref || github.ref_name }}

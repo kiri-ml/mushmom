@@ -10,8 +10,9 @@
     />
     <title data-i18n="meta.title">Mushmom | MapleLegends Statistics</title>
     <link rel="icon" href="/assets/icons/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/png" href="/assets/icons/favicon.png" sizes="64x64" />
     <link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png" sizes="180x180" />
-    <link rel="stylesheet" href="/styles.css" />
+    <script type="module" src="/src/main.ts"></script>
   </head>
   <body>
     <main class="app-shell">
@@ -125,35 +126,5 @@
         </div>
       </section>
     </main>
-
-    <script>
-      const GLOBAL_CDN = "https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js";
-      const CHINA_CDN = "https://cdn.jsdmirror.com/npm/echarts@5.6.0/dist/echarts.min.js";
-      const langs = navigator.languages?.length
-        ? navigator.languages
-        : [navigator.language || ""];
-      const isChinaStandardTime =
-        Intl.DateTimeFormat().resolvedOptions().timeZone === "Asia/Shanghai";
-      const preferChinaCdn =
-        isChinaStandardTime || langs.some((lang) => /-CN$/i.test(lang));
-      const source = preferChinaCdn ? CHINA_CDN : GLOBAL_CDN;
-      window.__mushmomEchartsReady = new Promise((resolve) => {
-        if (window.echarts) {
-          resolve();
-          return;
-        }
-
-        const script = document.createElement("script");
-        script.src = source;
-        script.async = true;
-        script.onload = () => {
-          if (window.echarts) resolve();
-        };
-        document.head.appendChild(script);
-      });
-    </script>
-    <script src="/i18n.js" defer></script>
-    <script src="/load.js" defer></script>
-    <script src="/app.js" defer></script>
   </body>
 </html>
