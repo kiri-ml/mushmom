@@ -183,9 +183,9 @@ type LatestFunctionModule = {
   };
 };
 type LatestRow = { timestamp: string; usercount: number };
-type LatestEnv = { GOOGLE_API_URL: string; GOOGLE_API_CACHE_TTL?: string };
+type LatestEnv = { GOOGLE_API_URL: string };
 type WaitUntilContext = { request: Request; env: LatestEnv; waitUntil: (promise: Promise<unknown>) => void };
-type FetchInitWithHeaders = { headers?: { range?: string } };
+type FetchInitWithHeaders = { headers?: { range?: string }; cf?: { cacheTtl?: number } };
 type CacheRequestLike = { url: string };
 type ArchiveManifest = {
   initial?: { file: string; period: string; rows: number; start: number | null; end: number | null };
@@ -726,7 +726,6 @@ describe("stats latest function", () => {
 
     const response = await mod.onRequestGet(makeContext("https://mushmom.test/api/stats/latest", {
       GOOGLE_API_URL: "https://example.test/stats.json",
-      GOOGLE_API_CACHE_TTL: "60",
     }));
     const body = await response.json();
 
@@ -734,9 +733,10 @@ describe("stats latest function", () => {
     const firstFetchCall = fetchMock.mock.calls[0] as unknown as [unknown, FetchInitWithHeaders?] | undefined;
     const firstFetchInit = firstFetchCall?.[1];
     expect(firstFetchInit?.headers?.range).toBe("bytes=0-262143");
+    expect(firstFetchInit?.cf?.cacheTtl).toBe(0);
     expect(body.data).toEqual([[1777335300, 1500], [1743465600 + 31536000, 1400]]);
     expect(body.completeWindow).toBe(true);
-    expect(response.headers.get("cache-control")).toBe("public, max-age=3600, s-maxage=3600");
+    expect(response.headers.get("cache-control")).toBe("public, max-age=300, s-maxage=1800, stale-while-revalidate=600, stale-if-error=3600");
     expect(cachePut).toHaveBeenCalledTimes(1);
   });
 

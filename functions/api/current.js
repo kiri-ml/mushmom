@@ -1,15 +1,12 @@
 const CURRENT_USERS_URL = "https://maplelegends.com/api/get_online_users";
-const CURRENT_USERS_CACHE_TTL = 300;
+const CURRENT_USERS_CACHE_CONTROL =
+  "public, max-age=15, s-maxage=60, stale-while-revalidate=30, stale-if-error=300";
 
 export async function onRequestGet() {
   try {
     const upstream = await fetch(CURRENT_USERS_URL, {
       headers: {
         accept: "application/json",
-      },
-      cf: {
-        cacheTtl: CURRENT_USERS_CACHE_TTL,
-        cacheEverything: true,
       },
     });
 
@@ -57,7 +54,7 @@ function json(body, status = 200) {
     status,
     headers: {
       "content-type": "application/json; charset=utf-8",
-      "cache-control": status === 200 ? `public, max-age=${CURRENT_USERS_CACHE_TTL}` : "no-store",
+      "cache-control": status === 200 ? CURRENT_USERS_CACHE_CONTROL : "no-store",
     },
   });
 }

@@ -4,14 +4,14 @@ const ESTIMATED_BYTES_PER_SAMPLE = 64;
 const RANGE_SAFETY_BYTES = 4096;
 const RANGE_SAFETY_SAMPLES = 8;
 const MAX_RANGE_BYTES = 1024 * 1024;
-const BROWSER_MAX_AGE_SECONDS = 60 * 60;
-const EDGE_CACHE_MAX_AGE_SECONDS = 60 * 60;
+const CLIENT_CACHE_CONTROL =
+  "public, max-age=300, s-maxage=1800, stale-while-revalidate=600, stale-if-error=3600";
+const UPSTREAM_DATA_CACHE_TTL_SECONDS = 0;
 const INVALID_AFTER = Symbol("invalid_after");
 
 export async function onRequestGet(context) {
   const requestUrl = new URL(context.request.url);
   const upstreamUrl = context.env.GOOGLE_API_URL;
-  const upstreamCacheTtl = getCacheTtl(context.env.GOOGLE_API_CACHE_TTL);
   const after = parseAfter(requestUrl.searchParams.get("after"));
 
   if (after === INVALID_AFTER) {
@@ -40,14 +40,14 @@ export async function onRequestGet(context) {
 
   try {
     const latest = after == null
-      ? await fetchLatestWindow(upstreamUrl, upstreamCacheTtl)
-      : await fetchRowsAfter(upstreamUrl, upstreamCacheTtl, after);
+      ? await fetchLatestWindow(upstreamUrl)
+      : await fetchRowsAfter(upstreamUrl, after);
 
     if (latest.errorResponse) {
       return latest.errorResponse;
     }
 
-    const response = json(latest.body, 200, BROWSER_MAX_AGE_SECONDS, EDGE_CACHE_MAX_AGE_SECONDS);
+    const response = json(latest.body);
     context.waitUntil(
       cache.put(cacheKey, response.clone()).catch(() => {
         // Ignore Cache API write failures so a successful upstream response still returns 200.
@@ -65,8 +65,8 @@ export async function onRequestGet(context) {
   }
 }
 
-async function fetchLatestWindow(url, cacheTtl) {
-  const parsed = await fetchRangeRows(url, cacheTtl, DEFAULT_LATEST_STATS_RANGE_BYTES);
+async function fetchLatestWindow(url) {
+  const parsed = await fetchRangeRows(url, DEFAULT_LATEST_STATS_RANGE_BYTES);
 
   if (parsed.errorResponse) return parsed;
 
@@ -115,7 +115,7 @@ async function fetchLatestWindow(url, cacheTtl) {
   };
 }
 
-async function fetchRowsAfter(url, cacheTtl, after) {
+async function fetchRowsAfter(url, after) {
   const initialRangeBytes = estimateRangeBytes(after);
   if (initialRangeBytes > MAX_RANGE_BYTES) {
     return { errorResponse: json({ error: "after_too_old" }, 413) };
@@ -124,7 +124,7 @@ async function fetchRowsAfter(url, cacheTtl, after) {
   let rangeBytes = initialRangeBytes;
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const parsed = await fetchRangeRows(url, cacheTtl, rangeBytes);
+    const parsed = await fetchRangeRows(url, rangeBytes);
     if (parsed.errorResponse) return parsed;
 
     const selectedRows = [];
@@ -167,15 +167,14 @@ async function fetchRowsAfter(url, cacheTtl, after) {
   return { errorResponse: json({ error: "after_too_old" }, 413) };
 }
 
-async function fetchRangeRows(url, cacheTtl, rangeBytes) {
+async function fetchRangeRows(url, rangeBytes) {
   const upstream = await fetch(url, {
     headers: {
       accept: "application/json",
       range: `bytes=0-${rangeBytes - 1}`,
     },
     cf: {
-      cacheTtl,
-      cacheEverything: true,
+      cacheTtl: UPSTREAM_DATA_CACHE_TTL_SECONDS,
     },
   });
 
@@ -235,11 +234,6 @@ function normalizeCacheUrl(url, after) {
   return cacheUrl;
 }
 
-function getCacheTtl(value) {
-  const seconds = Number(value || 3600);
-  return Number.isFinite(seconds) && seconds > 0 ? seconds : 3600;
-}
-
 function parseCompletePrefixRows(text) {
   const lastBraceIndex = text.lastIndexOf("}");
   if (lastBraceIndex === -1) return [];
@@ -277,12 +271,12 @@ function latestWindowStart(latestDate) {
   return Date.UTC(latestDate.getUTCFullYear(), latestDate.getUTCMonth() + monthOffset, 1);
 }
 
-function json(body, status = 200, browserMaxAge = BROWSER_MAX_AGE_SECONDS, edgeMaxAge = EDGE_CACHE_MAX_AGE_SECONDS) {
+function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
     headers: {
       "content-type": "application/json; charset=utf-8",
-      "cache-control": status === 200 ? `public, max-age=${browserMaxAge}, s-maxage=${edgeMaxAge}` : "no-store",
+      "cache-control": status === 200 ? CLIENT_CACHE_CONTROL : "no-store",
     },
   });
 }
@@ -294,8 +288,8 @@ export const testApi = {
   RANGE_SAFETY_BYTES,
   RANGE_SAFETY_SAMPLES,
   MAX_RANGE_BYTES,
-  BROWSER_MAX_AGE_SECONDS,
-  EDGE_CACHE_MAX_AGE_SECONDS,
+  CLIENT_CACHE_CONTROL,
+  UPSTREAM_DATA_CACHE_TTL_SECONDS,
   parseAfter,
   estimateRangeBytes,
   parseCompletePrefixRows,
