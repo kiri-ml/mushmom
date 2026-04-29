@@ -793,7 +793,7 @@ describe("stats latest function", () => {
 
   it("retries with a larger dynamic range when the first partial response does not reach the boundary", async () => {
     const mod = await loadLatestModule();
-    const now = Date.now();
+    const now = Date.UTC(2026, 3, 29, 0, 15, 0);
     vi.setSystemTime(new Date(now));
     const after = Math.floor(now / 1000) - (24 * 60 * 60);
     const first = '[{"timestamp":"2026-04-28 00:30:00+00","usercount":1600},{"timestamp":"2026-04-28 00:15:00+00","usercount":1500';
