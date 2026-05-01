@@ -2,7 +2,7 @@ name: Update Stats Archive
 
 on:
   schedule:
-    - cron: "33 1-3 1 * *"
+    - cron: "17 1-3 1-3 * *"
   workflow_dispatch:
 
 concurrency:
