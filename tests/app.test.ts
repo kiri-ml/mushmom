@@ -34,7 +34,10 @@ const indexHtml = fs.readFileSync(path.join(repoRoot, "index.html"), "utf8");
 const stylesCss = fs.readFileSync(path.join(repoRoot, "src/styles.css"), "utf8");
 const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")) as { scripts: Record<string, string> };
 const devScript = fs.readFileSync(path.join(repoRoot, "scripts/dev.cjs"), "utf8");
-const statsManifest = JSON.parse(fs.readFileSync(path.join(repoRoot, "public/assets/stats/manifests.json"), "utf8")) as { initial: { end: number; file: string } };
+const statsManifest = JSON.parse(fs.readFileSync(path.join(repoRoot, "public/assets/stats/manifests.json"), "utf8")) as {
+  initial: { end: number; file: string };
+  backfill?: Array<{ end: number | string; file: string }>;
+};
 const wranglerToml = fs.readFileSync(path.join(repoRoot, "wrangler.toml"), "utf8");
 
 function createStubElement(overrides: Partial<StubElement> = {}): StubElement {
@@ -609,10 +612,13 @@ describe("stats loader", () => {
 
   it("uses the bundled manifest without fetching manifests.json", async () => {
     const { module } = await loadStatsModule();
-    const manifestAfter = Math.floor(new Date("2026-03-31T23:45:07.000Z").getTime() / 1000);
+    const manifestAfter = Number(statsManifest.initial.end);
+    const oldestLatest = manifestAfter + 1;
+    const latestPayload = { data: [[oldestLatest + 3600, 1700], [oldestLatest, 1317]] };
+    const expectedArchiveChunks = (statsManifest.backfill ?? []).filter((chunk) => Number(chunk.end) < oldestLatest);
     const fetcher = vi.fn(async (url: string) => {
       if (url === `/api/stats/latest?after=${manifestAfter}`) {
-        return { data: [[1777594504, 1700], [1775001608, 1317]] };
+        return latestPayload;
       }
       if (url.startsWith("/assets/stats/")) {
         return { data: [] };
@@ -636,8 +642,8 @@ describe("stats loader", () => {
     expect(onArchive).toHaveBeenCalledTimes(1);
     const archiveCall = onArchive.mock.calls[0]?.[0];
     const selectedChunks = archiveCall?.chunks ?? [];
-    expect(selectedChunks.length).toBeGreaterThan(0);
-    expect(selectedChunks.every((chunk: { end?: number | string }) => Number(chunk.end) < 1775001608)).toBe(true);
+    expect(selectedChunks.map((chunk: { file: string }) => chunk.file)).toEqual(expectedArchiveChunks.map((chunk) => chunk.file));
+    expect(selectedChunks.every((chunk: { end?: number | string }) => Number(chunk.end) < oldestLatest)).toBe(true);
   });
 
   it("skips archive chunks overlapping latest payload", async () => {
