@@ -34,6 +34,7 @@ const indexHtml = fs.readFileSync(path.join(repoRoot, "index.html"), "utf8");
 const stylesCss = fs.readFileSync(path.join(repoRoot, "src/styles.css"), "utf8");
 const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")) as { scripts: Record<string, string> };
 const devScript = fs.readFileSync(path.join(repoRoot, "scripts/dev.cjs"), "utf8");
+const viteConfigSource = fs.readFileSync(path.join(repoRoot, "vite.config.ts"), "utf8");
 const statsManifest = JSON.parse(fs.readFileSync(path.join(repoRoot, "public/assets/stats/manifests.json"), "utf8")) as {
   initial: { end: number; file: string };
   backfill?: Array<{ end: number | string; file: string }>;
@@ -232,10 +233,13 @@ describe("vite migration", () => {
     expect(stylesCss).toMatch(/\.app-shell/);
   });
 
-  it("points tooling and Pages at dist", () => {
+  it("uses Vite as the dev origin and Pages Functions as the API backend", () => {
     expect(packageJson.scripts.dev).toBe("node scripts/dev.cjs");
     expect(packageJson.scripts["dev:vite"]).toBe("vite");
-    expect(devScript).toMatch(/--proxy/);
+    expect(devScript).toMatch(/\.dev-pages/);
+    expect(devScript).not.toMatch(/--proxy/);
+    expect(viteConfigSource).toMatch(/proxy/);
+    expect(viteConfigSource).toMatch(/"\/api"/);
     expect(devScript).toMatch(/WRANGLER_PORT/);
     expect(devScript).toMatch(/VITE_PORT/);
     expect(packageJson.scripts.test).toBe("vitest run");

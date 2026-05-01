@@ -2,6 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { defineConfig, type HtmlTagDescriptor } from "vite";
 
+const wranglerPort = process.env.WRANGLER_PORT || "8788";
+
 type StatsManifest = {
   initial?: {
     end?: number | string | null;
@@ -119,6 +121,15 @@ function buildApiPreloadTags(): HtmlTagDescriptor[] {
 }
 
 export default defineConfig({
+  server: {
+    port: 5173,
+    proxy: {
+      "/api": {
+        target: `http://127.0.0.1:${wranglerPort}`,
+        changeOrigin: true,
+      },
+    },
+  },
   plugins: [
     {
       name: "mushmom-html-startup",

@@ -1,16 +1,24 @@
 const { spawn } = require("node:child_process");
+const path = require("node:path");
 
 const host = process.env.DEV_HOST || "127.0.0.1";
 const wranglerPort = process.env.WRANGLER_PORT || "8788";
 const vitePort = process.env.VITE_PORT || "5173";
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 
+const repoRoot = path.resolve(__dirname, "..");
+const pagesAssetsDir = path.join(repoRoot, ".dev-pages");
+
 const children = new Set();
 let shuttingDown = false;
 
-function run(command, args) {
+function run(command, args, options = {}) {
   const child = spawn(command, args, {
-    env: process.env,
+    cwd: options.cwd || repoRoot,
+    env: {
+      ...process.env,
+      WRANGLER_LOG_PATH: process.env.WRANGLER_LOG_PATH || ".wrangler-logs",
+    },
     shell: false,
     stdio: "inherit",
   });
@@ -40,18 +48,18 @@ function shutdown(code = 0) {
 process.on("SIGINT", () => shutdown(130));
 process.on("SIGTERM", () => shutdown(143));
 
-run(npm, ["run", "dev:vite", "--", "--host", host, "--port", vitePort]);
+run(npm, ["run", "dev:vite", "--", "--host", host, "--port", vitePort, "--strictPort"]);
+
 run(npm, [
   "exec",
+  "--",
   "wrangler",
   "pages",
   "dev",
-  "--",
+  pagesAssetsDir,
   "--ip",
   host,
   "--port",
   wranglerPort,
-  "--proxy",
-  vitePort,
   "--show-interactive-dev-session=false",
 ]);
