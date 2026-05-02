@@ -1,6 +1,6 @@
 /// <reference path="./globals.d.ts" />
 
-import bundledManifest from "../public/assets/stats/manifests.json";
+import bundledManifest from "./assets/stats/manifests.json";
 
 const DEFAULT_LATEST_URL = "/api/stats/latest";
 const DEFAULT_ARCHIVE_BASE_URL = "/assets/stats/";

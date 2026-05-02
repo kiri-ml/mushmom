@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const DEFAULT_OUTPUT_DIR = "public/assets/stats";
+const DEFAULT_BUNDLED_MANIFEST_PATH = "src/assets/stats/manifests.json";
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
@@ -63,8 +64,16 @@ function generateArchive(payload, outputDir) {
   }
 
   writeJson(path.join(outputDir, "manifests.json"), manifest);
+  writeBundledManifest(outputDir, manifest);
 
   return { manifest, chunks: archiveFiles };
+}
+
+function writeBundledManifest(outputDir, manifest) {
+  const defaultOutputDir = path.resolve(process.cwd(), DEFAULT_OUTPUT_DIR);
+  if (path.resolve(outputDir) !== defaultOutputDir) return;
+
+  writeJson(path.resolve(process.cwd(), DEFAULT_BUNDLED_MANIFEST_PATH), manifest);
 }
 
 function parseArgs(args) {
