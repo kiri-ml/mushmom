@@ -22,7 +22,6 @@ interface CurrentStatus {
 }
 
 interface TimelineConfig {
-  type: "line" | "candlestick";
   labelKey: string;
   bucketKey?: string;
   unit?: BucketUnit;
@@ -34,12 +33,16 @@ interface DistributionBucket {
   count: number;
 }
 
-interface CandleState {
+interface BucketSummary {
   time: number;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
+  min: number;
+  max: number;
+  avg: number;
+  samples: number;
+}
+
+interface BucketAccumulator extends BucketSummary {
+  total: number;
 }
 
 const chartElement = requireElement("#population-chart");
@@ -358,13 +361,13 @@ function formatPercentage(value: number): string {
 }
 
 const TIMELINE_RANGE_CONFIG: Record<Exclude<ChartRange, "24h" | "ytd">, TimelineConfig> = {
-  "7d": { type: "line", labelKey: "chart.series.players" },
-  "28d": { type: "candlestick", labelKey: "chart.series.playersBucket", bucketKey: "bucket.4h", unit: "hour", size: 4 },
-  "90d": { type: "candlestick", labelKey: "chart.series.playersBucket", bucketKey: "bucket.12h", unit: "hour", size: 12 },
-  "180d": { type: "candlestick", labelKey: "chart.series.playersBucket", bucketKey: "bucket.1d", unit: "day", size: 1 },
-  "1y": { type: "candlestick", labelKey: "chart.series.playersBucket", bucketKey: "bucket.48h", unit: "day", size: 2 },
-  "3y": { type: "candlestick", labelKey: "chart.series.playersBucket", bucketKey: "bucket.1w", unit: "week", size: 1 },
-  all: { type: "candlestick", labelKey: "chart.series.playersBucket", bucketKey: "bucket.1w", unit: "week", size: 1 },
+  "7d": { labelKey: "chart.series.players" },
+  "28d": { labelKey: "chart.series.averagePlayersBucket", bucketKey: "bucket.4h", unit: "hour", size: 4 },
+  "90d": { labelKey: "chart.series.averagePlayersBucket", bucketKey: "bucket.12h", unit: "hour", size: 12 },
+  "180d": { labelKey: "chart.series.averagePlayersBucket", bucketKey: "bucket.1d", unit: "day", size: 1 },
+  "1y": { labelKey: "chart.series.averagePlayersBucket", bucketKey: "bucket.48h", unit: "day", size: 2 },
+  "3y": { labelKey: "chart.series.averagePlayersBucket", bucketKey: "bucket.1w", unit: "week", size: 1 },
+  all: { labelKey: "chart.series.averagePlayersBucket", bucketKey: "bucket.1w", unit: "week", size: 1 },
 };
 
 function getSeriesLabel(config: TimelineConfig): string {
@@ -411,20 +414,31 @@ function bucketStart(timestamp: number, config: { unit: BucketUnit; size: number
   return anchor + Math.floor(weekIndex / config.size) * config.size * WEEK_MS;
 }
 
-function buildCandles(points: StatsPoint[], config: { unit: BucketUnit; size: number }): number[][] {
-  const buckets = new Map<number, CandleState>();
+function buildBucketSummaries(points: StatsPoint[], config: { unit: BucketUnit; size: number }): BucketSummary[] {
+  const buckets = new Map<number, BucketAccumulator>();
   points.forEach((point) => {
     const bucket = bucketStart(point.date.getTime(), config);
     const existing = buckets.get(bucket);
     if (!existing) {
-      buckets.set(bucket, { time: bucket, open: point.count, high: point.count, low: point.count, close: point.count });
+      buckets.set(bucket, {
+        time: bucket,
+        min: point.count,
+        max: point.count,
+        avg: point.count,
+        samples: 1,
+        total: point.count,
+      });
       return;
     }
-    existing.high = Math.max(existing.high, point.count);
-    existing.low = Math.min(existing.low, point.count);
-    existing.close = point.count;
+    existing.min = Math.min(existing.min, point.count);
+    existing.max = Math.max(existing.max, point.count);
+    existing.samples += 1;
+    existing.total += point.count;
+    existing.avg = existing.total / existing.samples;
   });
-  return [...buckets.values()].sort((a, b) => a.time - b.time).map((candle) => [candle.time, candle.open, candle.close, candle.low, candle.high]);
+  return [...buckets.values()]
+    .sort((a, b) => a.time - b.time)
+    .map(({ total, ...bucket }) => bucket);
 }
 
 function getTimelineConfig(range: ChartRange, visible: StatsPoint[]): TimelineConfig {
@@ -459,16 +473,47 @@ function buildTimelineOptions(points: StatsPoint[]) {
   const visible = pointsForRange(points, currentRange);
   const config = getTimelineConfig(currentRange, visible);
   const values = visible.map((point) => [point.date.getTime(), point.count]);
-  const candles = config.type === "candlestick" ? buildCandles(visible, { unit: config.unit as BucketUnit, size: config.size as number }) : [];
+  const bucketed = config.unit != null && config.size != null;
+  const buckets = bucketed ? buildBucketSummaries(visible, { unit: config.unit as BucketUnit, size: config.size as number }) : [];
+  const averageData = buckets.map((bucket) => [bucket.time, Math.round(bucket.avg)]);
+  const rangeBaseData = buckets.map((bucket) => [bucket.time, bucket.min]);
+  const rangeSpreadData = buckets.map((bucket) => [bucket.time, bucket.max - bucket.min]);
+  const bucketMin = buckets.length > 0 ? Math.min(...buckets.map((bucket) => bucket.min)) : 0;
+  const bucketMax = buckets.length > 0 ? Math.max(...buckets.map((bucket) => bucket.max)) : 0;
+
   return {
     ...baseAxisOption(),
-    tooltip: config.type === "candlestick" ? { trigger: "axis", backgroundColor: "#22292a", borderColor: "#35403e", textStyle: { color: "#f4f1e8" }, formatter: (params: Array<{ value?: number[] }>) => { const item = params[0]; if (!item?.value) return ""; const [time, open, close, low, high] = item.value; return [`<strong>${formatBucketRange(time, { unit: config.unit as BucketUnit, size: config.size as number })}</strong>`, `${tr("chart.tooltip.start")}: ${formatInteger(open)}`, `${tr("chart.tooltip.peak")}: ${formatInteger(high)}`, `${tr("chart.tooltip.trough")}: ${formatInteger(low)}`, `${tr("chart.tooltip.end")}: ${formatInteger(close)}`].join("<br />"); } } : { trigger: "axis", backgroundColor: "#22292a", borderColor: "#35403e", textStyle: { color: "#f4f1e8" }, valueFormatter: (value: number | string) => Number.isFinite(Number(value)) ? formatLocaleNumber(Number(value)) : value },
+    tooltip: bucketed ? {
+      trigger: "axis",
+      backgroundColor: "#22292a",
+      borderColor: "#35403e",
+      textStyle: { color: "#f4f1e8" },
+      formatter: (params: Array<{ dataIndex?: number }>) => {
+        const index = params[0]?.dataIndex;
+        if (index == null) return "";
+        const bucket = buckets[index];
+        if (!bucket) return "";
+        return [
+          `<strong>${formatBucketRange(bucket.time, { unit: config.unit as BucketUnit, size: config.size as number })}</strong>`,
+          `${tr("chart.tooltip.avg")}: ${formatInteger(bucket.avg)}`,
+          `${tr("chart.tooltip.peak")}: ${formatInteger(bucket.max)}`,
+          `${tr("chart.tooltip.trough")}: ${formatInteger(bucket.min)}`,
+          tr("chart.tooltip.samplesCount", { count: formatLocaleNumber(bucket.samples) }),
+        ].join("<br />");
+      },
+    } : { trigger: "axis", backgroundColor: "#22292a", borderColor: "#35403e", textStyle: { color: "#f4f1e8" }, valueFormatter: (value: number | string) => Number.isFinite(Number(value)) ? formatLocaleNumber(Number(value)) : value },
     grid: { left: 52, right: 24, top: 34, bottom: 76 },
     xAxis: { type: "time", axisLine: { lineStyle: { color: "#35403e" } }, axisLabel: { color: "#a9b1ad", formatter: (value: number) => formatTimelineAxisLabel(value, currentRange) }, splitLine: { show: false } },
-    yAxis: { type: "value", min: config.type === "candlestick" ? (value: { min: number }) => Math.max(0, Math.floor(value.min * 0.94)) : 0, axisLabel: { color: "#a9b1ad" }, splitLine: { lineStyle: { color: "rgba(169, 177, 173, 0.14)" } } },
+    yAxis: { type: "value", min: bucketed ? Math.max(0, Math.floor(bucketMin * 0.94)) : 0, max: bucketed ? Math.ceil(bucketMax * 1.03) : undefined, axisLabel: { color: "#a9b1ad" }, splitLine: { lineStyle: { color: "rgba(169, 177, 173, 0.14)" } } },
     dataZoom: [{ type: "inside", throttle: 80 }, { type: "slider", height: 24, bottom: 16, borderColor: "#35403e", fillerColor: "rgba(125, 216, 125, 0.18)", handleStyle: { color: "#7dd87d" }, textStyle: { color: "#a9b1ad" } }],
-    series: [config.type === "candlestick" ? { name: getSeriesLabel(config), type: "candlestick", data: candles, itemStyle: { color: "#7dd87d", color0: "#d96b5f", borderColor: "#7dd87d", borderColor0: "#d96b5f" } } : { name: getSeriesLabel(config), type: "line", smooth: true, showSymbol: visible.length < 80, symbolSize: 7, lineStyle: { width: 3, color: "#7dd87d" }, itemStyle: { color: "#f1c44f" }, areaStyle: { color: { type: "linear", x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: "rgba(125, 216, 125, 0.36)" }, { offset: 1, color: "rgba(125, 216, 125, 0.02)" }] } }, data: values }],
-    graphic: config.type === "candlestick" ? (candles.length === 0 ? emptyGraphic() : null) : (values.length === 0 ? emptyGraphic() : null),
+    series: bucketed ? [
+      { id: "range-base", type: "line", stack: "population-range", data: rangeBaseData, symbol: "none", lineStyle: { opacity: 0 }, itemStyle: { opacity: 0 }, areaStyle: { opacity: 0 }, silent: true, tooltip: { show: false } },
+      { id: "range-spread", name: tr("chart.series.playerRange"), type: "line", stack: "population-range", data: rangeSpreadData, symbol: "none", lineStyle: { opacity: 0 }, areaStyle: { color: "rgba(125, 216, 125, 0.16)" }, silent: true, tooltip: { show: false } },
+      { id: "bucket-average", name: getSeriesLabel(config), type: "line", smooth: true, showSymbol: buckets.length < 80, symbolSize: 7, lineStyle: { width: 3, color: "#7dd87d" }, itemStyle: { color: "#f1c44f" }, data: averageData, z: 3 },
+    ] : [
+      { name: getSeriesLabel(config), type: "line", smooth: true, showSymbol: visible.length < 80, symbolSize: 7, lineStyle: { width: 3, color: "#7dd87d" }, itemStyle: { color: "#f1c44f" }, areaStyle: { color: { type: "linear", x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: "rgba(125, 216, 125, 0.36)" }, { offset: 1, color: "rgba(125, 216, 125, 0.02)" }] } }, data: values },
+    ],
+    graphic: bucketed ? (buckets.length === 0 ? emptyGraphic() : null) : (values.length === 0 ? emptyGraphic() : null),
   };
 }
 
@@ -636,7 +681,7 @@ const testApi = {
   getHeatmapVisualBounds,
   getHeatmapPercentileRanks,
   buildDistributionBuckets,
-  buildCandles,
+  buildBucketSummaries,
   buildTimelineOptions,
   buildHeatmapOptions,
   buildDistributionOptions,
@@ -646,4 +691,4 @@ const testApi = {
 
 globalThis.__MUSHMOM_TEST__ = testApi;
 
-export { initApp, normalizePayload, isKnownBadPoint, formatTime, formatTimelineAxisLabel, formatWeekdayLabels, formatBucketRange, getHeatmapVisualBounds, getHeatmapPercentileRanks, buildDistributionBuckets, buildCandles, buildTimelineOptions, buildHeatmapOptions, buildDistributionOptions, testApi };
+export { initApp, normalizePayload, isKnownBadPoint, formatTime, formatTimelineAxisLabel, formatWeekdayLabels, formatBucketRange, getHeatmapVisualBounds, getHeatmapPercentileRanks, buildDistributionBuckets, buildBucketSummaries, buildTimelineOptions, buildHeatmapOptions, buildDistributionOptions, testApi };

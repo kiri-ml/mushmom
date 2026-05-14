@@ -384,7 +384,7 @@ describe("bundled i18n", () => {
 });
 
 describe("app behavior", () => {
-  it("uses line for 7d and candlesticks for longer bucketed ranges", async () => {
+  it("uses line for 7d and range band for longer bucketed ranges", async () => {
     const { module, globals } = await loadAppModule();
     useWindow(globals);
     const points = [
@@ -394,10 +394,15 @@ describe("app behavior", () => {
     module.testApi.setCurrentRangeForTest("7d");
     expect(module.buildTimelineOptions(points).series[0]?.type).toBe("line");
     module.testApi.setCurrentRangeForTest("28d");
-    expect(module.buildTimelineOptions(points).series[0]?.type).toBe("candlestick");
+    const bucketedOptions = module.buildTimelineOptions(points);
+    const bucketedSeries = bucketedOptions.series as Array<{ id?: string; type?: string }>;
+    expect(bucketedSeries.map((series) => series.type)).toEqual(["line", "line", "line"]);
+    expect(bucketedSeries[0]?.id).toBe("range-base");
+    expect(bucketedSeries[1]?.id).toBe("range-spread");
+    expect(bucketedSeries[2]?.id).toBe("bucket-average");
   });
 
-  it("uses compact bucket ranges in candle tooltips", async () => {
+  it("uses compact bucket ranges in bucket tooltips", async () => {
     const { module, globals } = await loadAppModule();
     useWindow(globals);
     const sameDay = module.formatBucketRange(new Date(2026, 3, 24, 12).getTime(), { unit: "hour", size: 4 });
@@ -406,16 +411,18 @@ describe("app behavior", () => {
     expect(multiDay).toMatch(/Apr 24 - Apr 25/);
   });
 
-  it("aligns weekly candlesticks to local calendar week boundaries", async () => {
+  it("aligns weekly bucket summaries to local calendar week boundaries", async () => {
     const { module } = await loadAppModule();
-    const candles = module.buildCandles([
+    const buckets = module.buildBucketSummaries([
       { date: new Date(2024, 11, 29, 12), count: 1200 },
       { date: new Date(2024, 11, 30, 12), count: 1300 },
       { date: new Date(2025, 0, 4, 12), count: 1100 },
       { date: new Date(2025, 0, 5, 12), count: 1400 },
       { date: new Date(2025, 0, 6, 12), count: 1500 },
     ], { unit: "week", size: 1 });
-    expect(candles.length).toBe(2);
+    expect(buckets.length).toBe(2);
+    expect(buckets[0]).toMatchObject({ min: 1100, max: 1300, samples: 3 });
+    expect(buckets[1]).toMatchObject({ min: 1400, max: 1500, samples: 2 });
   });
 
   it("accepts compact epoch-second rows and removes only configured bad samples", async () => {
