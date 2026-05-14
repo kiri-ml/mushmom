@@ -42,3 +42,4 @@ declare var echarts: EChartsLike;
 declare var __mushmomEchartsReady: Promise<unknown> | undefined;
 declare var __MUSHMOM_TEST__: Record<string, unknown>;
 interface Window { MushmomI18n?: MushmomI18nApi; MushmomStatsLoader?: MushmomStatsLoaderApi; echarts?: EChartsLike; __mushmomEchartsReady?: Promise<unknown>; }
+declare module "*.css";
