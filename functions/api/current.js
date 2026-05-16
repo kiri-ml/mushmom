@@ -1,4 +1,4 @@
-const CURRENT_USERS_URL = "https://maplelegends.com/api/get_online_users";
+const CURRENT_USERS_URL = "https://legends.ml/api/get_online_users";
 const CURRENT_USERS_CACHE_CONTROL =
   "public, max-age=15, s-maxage=60, stale-while-revalidate=30, stale-if-error=300";
 
