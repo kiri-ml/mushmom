@@ -462,6 +462,25 @@ describe("app behavior", () => {
     expect(bounds.max).toBe(100);
   });
 
+  it("spreads heatmap colors across high-population averages", async () => {
+    const { module, globals } = await loadAppModule();
+    useWindow(globals);
+    module.testApi.setCurrentRangeForTest("7d");
+    const options = module.buildHeatmapOptions([
+      { date: new Date(2026, 0, 1, 0), count: 2000 },
+      { date: new Date(2026, 0, 1, 1), count: 2200 },
+      { date: new Date(2026, 0, 1, 2), count: 2400 },
+      { date: new Date(2026, 0, 1, 3), count: 2600 },
+    ]);
+    const heatmapData = (options.series[0]?.data || []) as Array<[number, number, number | null, number, Record<string, number>, number]>;
+    const scoresByCount = new Map(heatmapData.map(([, , score, count]) => [count, score]));
+
+    expect(scoresByCount.get(2000)).toBe(82);
+    expect(scoresByCount.get(2200)).toBe(88);
+    expect(scoresByCount.get(2400)).toBe(94);
+    expect(scoresByCount.get(2600)).toBe(98);
+  });
+
   it("waits for ECharts before loading archive stats", async () => {
     let resolveEcharts!: () => void;
     const echartsReady = new Promise<void>((resolve) => {
