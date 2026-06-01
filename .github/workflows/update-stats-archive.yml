@@ -42,7 +42,7 @@ jobs:
       - name: Detect archive changes
         id: archive
         run: |
-          if [ -z "$(git status --porcelain -- public/assets/stats)" ]; then
+          if [ -z "$(git status --porcelain -- public/assets/stats src/assets/stats/manifests.json)" ]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
@@ -52,7 +52,7 @@ jobs:
         if: steps.archive.outputs.changed == 'true'
         uses: EndBug/add-and-commit@v10
         with:
-          add: public/assets/stats
+          add: public/assets/stats src/assets/stats/manifests.json
           author_name: github-actions[bot]
           author_email: github-actions[bot]@users.noreply.github.com
           message: "[ci] monthly stats archive"
