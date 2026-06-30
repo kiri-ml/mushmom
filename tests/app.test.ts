@@ -298,7 +298,7 @@ describe("vite migration", () => {
     expect(transformed.indexOf(initialPreload)).toBeLessThan(transformed.indexOf(script));
     expect(transformed.indexOf(currentPreload)).toBeLessThan(transformed.indexOf(script));
     expect(transformed.indexOf(script)).toBeLessThan(transformed.indexOf('<script type="module" src="/src/main.ts"></script>'));
-    expect(indexHtml).not.toContain("echarts@5.6.0");
+    expect(indexHtml).not.toContain("echarts@6.1.0");
   });
 });
 

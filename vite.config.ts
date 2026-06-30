@@ -13,8 +13,8 @@ type StatsManifest = {
 
 const STATS_ARCHIVE_BASE_URL = "/assets/stats/";
 
-const GLOBAL_ECHARTS_CDN = "https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js";
-const CHINA_ECHARTS_CDN = "https://cdn.jsdmirror.com/npm/echarts@5.6.0/dist/echarts.min.js";
+const GLOBAL_ECHARTS_CDN = "https://cdn.jsdelivr.net/npm/echarts@6.1.0/dist/echarts.min.js";
+const CHINA_ECHARTS_CDN = "https://cdn.jsdmirror.com/npm/echarts@6.1.0/dist/echarts.min.js";
 
 function readStatsManifest(): StatsManifest {
   const manifestPath = path.resolve("public/assets/stats/manifests.json");
