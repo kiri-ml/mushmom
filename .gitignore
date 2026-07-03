@@ -1,5 +1,6 @@
 node_modules/
 .wrangler/
+.r2/
 .dev.vars
 /r2.env
 dist/

@@ -34,10 +34,21 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Generate stats archive
-        run: npm run generate:stats-archive
+      - name: Download R2 stats
+        run: |
+          mkdir -p .r2/stats/jsonl
+          aws s3 sync \
+            s3://mushmom-stats/stats/jsonl \
+            .r2/stats/jsonl \
+            --endpoint-url "https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com"
         env:
-          GOOGLE_API_URL: ${{ secrets.GOOGLE_API_URL }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Generate stats archive
+        run: npm run generate:stats-archive -- --jsonl-dir .r2/stats/jsonl
 
       - name: Detect archive changes
         id: archive

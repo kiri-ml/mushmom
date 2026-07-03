@@ -196,7 +196,9 @@ type ArchiveManifest = {
   backfill: Array<{ file: string; period: string; rows: number }>;
 };
 type StatsArchiveGenerator = {
-  generateArchive: (payload: unknown, outputDir: string) => { manifest: ArchiveManifest };
+  generateArchive: (payload: unknown, outputDir: string, additionalRows?: Array<[number, number]>) => { manifest: ArchiveManifest };
+  readExistingArchiveRows: (outputDir: string) => Array<[number, number]>;
+  readJsonlDirectory: (jsonlDir: string) => Array<[number, number]>;
 };
 
 function useWindow(globals: GlobalOverrides): void {
@@ -344,6 +346,44 @@ describe("stats archive generator", () => {
       "2026-01.json",
       "2025.json",
     ]);
+  });
+
+  it("merges R2 JSONL rows with existing archive rows and deduplicates timestamps", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mushmom-r2-jsonl-"));
+    const jsonlDir = path.join(tempDir, "jsonl");
+    const outputDir = path.join(tempDir, "out");
+    fs.mkdirSync(jsonlDir);
+    fs.writeFileSync(path.join(jsonlDir, "2026-07-31.jsonl"), "[1785456000,1200]\n");
+    fs.writeFileSync(path.join(jsonlDir, "2026-08-01.jsonl"), "[1785542400,1300]\n[1785542700,1400]\n");
+
+    const generator = require(path.join(repoRoot, "scripts/generate_stats_archive.cjs")) as StatsArchiveGenerator;
+    const jsonlRows = generator.readJsonlDirectory(jsonlDir);
+    generator.generateArchive({ data: [[1785456000, 999], [1782863104, 1100]] }, outputDir, jsonlRows);
+
+    const july = JSON.parse(fs.readFileSync(path.join(outputDir, "2026-07.json"), "utf8")) as { data: Array<[number, number]> };
+    expect(july.data).toEqual([[1785456000, 1200]]);
+  });
+
+  it("uses committed archive files as the pre-R2 history", () => {
+    const { outputDir } = generateStatsArchive([
+      { timestamp: "2026-07-02T00:00:00Z", usercount: 1300 },
+      { timestamp: "2026-06-30T23:45:04Z", usercount: 1200 },
+      { timestamp: "2025-12-31T23:45:04Z", usercount: 1100 },
+    ]);
+    const generator = require(path.join(repoRoot, "scripts/generate_stats_archive.cjs")) as StatsArchiveGenerator;
+
+    expect(generator.readExistingArchiveRows(outputDir)).toEqual(expect.arrayContaining([
+      [1782863104, 1200],
+      [1767224704, 1100],
+    ]));
+  });
+
+  it("fails clearly on invalid R2 JSONL", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mushmom-invalid-jsonl-"));
+    fs.writeFileSync(path.join(tempDir, "2026-07-03.jsonl"), "[1783036800,-1]\n");
+    const generator = require(path.join(repoRoot, "scripts/generate_stats_archive.cjs")) as StatsArchiveGenerator;
+
+    expect(() => generator.readJsonlDirectory(tempDir)).toThrow("expected a non-negative integer tuple");
   });
 });
 
