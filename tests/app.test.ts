@@ -187,7 +187,11 @@ type LatestFunctionModule = {
   };
 };
 type LatestRow = { timestamp: string; usercount: number };
-type LatestEnv = { GOOGLE_API_URL: string };
+type R2BucketStub = {
+  list: (options: { prefix: string; cursor?: string }) => Promise<{ objects: Array<{ key: string }>; truncated: boolean; cursor?: string }>;
+  get: (key: string) => Promise<{ text: () => Promise<string> } | null>;
+};
+type LatestEnv = { GOOGLE_API_URL: string; STATS_BUCKET?: R2BucketStub };
 type WaitUntilContext = { request: Request; env: LatestEnv; waitUntil: (promise: Promise<unknown>) => void };
 type FetchInitWithHeaders = { headers?: { range?: string }; cf?: { cacheTtl?: number } };
 type CacheRequestLike = { url: string };
@@ -248,6 +252,8 @@ describe("vite migration", () => {
     expect(packageJson.scripts.build).toBe("vite build");
     expect(packageJson.scripts.check).toBe("npm run test && npm run typecheck && npm run build");
     expect(wranglerToml).toMatch(/pages_build_output_dir = "dist"/);
+    expect(wranglerToml).toMatch(/binding = "STATS_BUCKET"/);
+    expect(wranglerToml).toMatch(/bucket_name = "mushmom-stats"/);
   });
 
   it("preloads startup API requests from the HTML transform", () => {
@@ -781,10 +787,25 @@ describe("stats latest function", () => {
     return JSON.stringify(rows);
   }
 
+  function makeR2Bucket(objects: Record<string, string> = {}): R2BucketStub {
+    return {
+      async list() {
+        return {
+          objects: Object.keys(objects).map((key) => ({ key })),
+          truncated: false,
+        };
+      },
+      async get(key: string) {
+        const value = objects[key];
+        return value === undefined ? null : { async text() { return value; } };
+      },
+    };
+  }
+
   function makeContext(url: string, env: LatestEnv): WaitUntilContext {
     return {
       request: new Request(url),
-      env,
+      env: { ...env, STATS_BUCKET: env.STATS_BUCKET ?? makeR2Bucket() } as LatestEnv & { STATS_BUCKET: R2BucketStub },
       waitUntil() {},
     };
   }
@@ -814,7 +835,7 @@ describe("stats latest function", () => {
     expect(firstFetchInit?.cf?.cacheTtl).toBe(0);
     expect(body.data).toEqual([[1777335300, 1500], [1743465600 + 31536000, 1400]]);
     expect(body.completeWindow).toBe(true);
-    expect(response.headers.get("cache-control")).toBe("public, max-age=300, s-maxage=1800, stale-while-revalidate=600, stale-if-error=3600");
+    expect(response.headers.get("cache-control")).toBe("public, max-age=60, s-maxage=300, stale-while-revalidate=60, stale-if-error=3600");
     expect(cachePut).toHaveBeenCalledTimes(1);
   });
 
@@ -840,6 +861,58 @@ describe("stats latest function", () => {
     expect(body.data).toEqual([[1777336200, 1600]]);
     expect(body.data[0][0]).toBe(Math.floor(Date.UTC(2026, 3, 28, 0, 30, 0) / 1000));
     expect(body.completeWindow).toBe(true);
+  });
+
+  it("combines Google and R2 rows with R2 winning each five-minute bucket", async () => {
+    const mod = await loadLatestModule();
+    const rows = makeRows([
+      { timestamp: "2026-07-03 00:10:04+00", usercount: 1800 },
+      { timestamp: "2026-07-03 00:05:04+00", usercount: 1500 },
+      { timestamp: "2026-07-03 00:00:04+00", usercount: 1400 },
+      { timestamp: "2026-07-02 23:55:00+00", usercount: 1300 },
+    ]);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(rows, { status: 206 })));
+    vi.stubGlobal("caches", { default: { match: vi.fn(async () => undefined), put: vi.fn(async () => undefined) } });
+    const after = Math.floor(Date.UTC(2026, 6, 2, 23, 55, 0) / 1000);
+    const bucket = makeR2Bucket({
+      "stats/jsonl/2026-07-03.jsonl": "[1783036800,1600]\n[1783037100,1700]\n",
+    });
+
+    const response = await mod.onRequestGet(makeContext(`https://mushmom.test/api/stats/latest?after=${after}`, {
+      GOOGLE_API_URL: "https://example.test/stats.json",
+      STATS_BUCKET: bucket,
+    }));
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.source).toBe("Google API + R2");
+    expect(body.data).toEqual([
+      [1783037404, 1800],
+      [1783037100, 1700],
+      [1783036800, 1600],
+    ]);
+  });
+
+  it("fails clearly when an R2 daily object contains invalid JSONL", async () => {
+    const mod = await loadLatestModule();
+    const rows = makeRows([
+      { timestamp: "2026-07-03 00:00:04+00", usercount: 1400 },
+      { timestamp: "2026-07-02 23:55:00+00", usercount: 1300 },
+    ]);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(rows, { status: 206 })));
+    vi.stubGlobal("caches", { default: { match: vi.fn(async () => undefined), put: vi.fn(async () => undefined) } });
+    const after = Math.floor(Date.UTC(2026, 6, 2, 23, 55, 0) / 1000);
+
+    const response = await mod.onRequestGet(makeContext(`https://mushmom.test/api/stats/latest?after=${after}`, {
+      GOOGLE_API_URL: "https://example.test/stats.json",
+      STATS_BUCKET: makeR2Bucket({ "stats/jsonl/2026-07-03.jsonl": "not-json\n" }),
+    }));
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({
+      error: "Invalid R2 JSONL in stats/jsonl/2026-07-03.jsonl at line 1: malformed JSON.",
+      data: [],
+    });
   });
 
   it("returns 400 for invalid after", async () => {

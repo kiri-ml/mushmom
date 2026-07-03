@@ -1,11 +1,13 @@
 const DEFAULT_LATEST_STATS_RANGE_BYTES = 256 * 1024;
-const SAMPLE_INTERVAL_MS = 15 * 60 * 1000;
+const GOOGLE_SAMPLE_INTERVAL_MS = 15 * 60 * 1000;
+const R2_SAMPLE_INTERVAL_SECONDS = 5 * 60;
+const R2_JSONL_PREFIX = "stats/jsonl/";
 const ESTIMATED_BYTES_PER_SAMPLE = 64;
 const RANGE_SAFETY_BYTES = 4096;
 const RANGE_SAFETY_SAMPLES = 8;
 const MAX_RANGE_BYTES = 1024 * 1024;
 const CLIENT_CACHE_CONTROL =
-  "public, max-age=300, s-maxage=1800, stale-while-revalidate=600, stale-if-error=3600";
+  "public, max-age=60, s-maxage=300, stale-while-revalidate=60, stale-if-error=3600";
 const UPSTREAM_DATA_CACHE_TTL_SECONDS = 0;
 const INVALID_AFTER = Symbol("invalid_after");
 
@@ -27,6 +29,15 @@ export async function onRequestGet(context) {
       503,
     );
   }
+  if (!context.env.STATS_BUCKET) {
+    return json(
+      {
+        error: "STATS_BUCKET is not configured.",
+        data: [],
+      },
+      503,
+    );
+  }
 
   const cache = caches.default;
   const cacheKey = new Request(normalizeCacheUrl(requestUrl, after).toString(), {
@@ -39,15 +50,24 @@ export async function onRequestGet(context) {
   }
 
   try {
-    const latest = after == null
+    const google = after == null
       ? await fetchLatestWindow(upstreamUrl)
       : await fetchRowsAfter(upstreamUrl, after);
 
-    if (latest.errorResponse) {
-      return latest.errorResponse;
+    if (google.errorResponse) {
+      return google.errorResponse;
     }
 
-    const response = json(latest.body);
+    const cutoff = after ?? Math.floor(Date.parse(google.body.windowStart) / 1000);
+    const r2Rows = await fetchR2Rows(context.env.STATS_BUCKET, cutoff);
+    const body = {
+      ...google.body,
+      source: "Google API + R2",
+      sourceUrl: null,
+      data: mergeStatsRows(google.body.data, r2Rows),
+    };
+
+    const response = json(body);
     context.waitUntil(
       cache.put(cacheKey, response.clone()).catch(() => {
         // Ignore Cache API write failures so a successful upstream response still returns 200.
@@ -57,12 +77,88 @@ export async function onRequestGet(context) {
   } catch (error) {
     return json(
       {
-        error: error instanceof Error ? error.message : "Failed to fetch Google API data.",
+        error: error instanceof Error ? error.message : "Failed to fetch latest stats.",
         data: [],
       },
       502,
     );
   }
+}
+
+async function fetchR2Rows(bucket, after) {
+  const minimumKey = dailyKeyForTimestamp(after);
+  const objects = [];
+  let cursor;
+
+  do {
+    const listed = await bucket.list({
+      prefix: R2_JSONL_PREFIX,
+      ...(cursor ? { cursor } : {}),
+    });
+    objects.push(...listed.objects.filter((object) => object.key >= minimumKey));
+    cursor = listed.truncated ? listed.cursor : undefined;
+  } while (cursor);
+
+  const files = await Promise.all(objects.map(async (object) => {
+    const body = await bucket.get(object.key);
+    if (!body) throw new Error(`R2 object disappeared while reading: ${object.key}`);
+    return parseR2Jsonl(await body.text(), object.key);
+  }));
+
+  return files.flat().filter((row) => row[0] > after);
+}
+
+function dailyKeyForTimestamp(epochSeconds) {
+  const date = new Date(epochSeconds * 1000);
+  if (Number.isNaN(date.getTime())) throw new Error("Invalid R2 cutoff timestamp.");
+  return `${R2_JSONL_PREFIX}${date.toISOString().slice(0, 10)}.jsonl`;
+}
+
+function parseR2Jsonl(text, key) {
+  const trimmed = text.trim();
+  if (!trimmed) return [];
+
+  return trimmed.split(/\r?\n/).map((line, index) => {
+    let row;
+    try {
+      row = JSON.parse(line);
+    } catch {
+      throw new Error(`Invalid R2 JSONL in ${key} at line ${index + 1}: malformed JSON.`);
+    }
+
+    if (!isStatsRow(row)) {
+      throw new Error(`Invalid R2 JSONL in ${key} at line ${index + 1}: expected [epochSeconds, usercount].`);
+    }
+    return row;
+  });
+}
+
+function isStatsRow(row) {
+  return Array.isArray(row)
+    && row.length === 2
+    && Number.isInteger(row[0])
+    && row[0] >= 0
+    && Number.isInteger(row[1])
+    && row[1] >= 0;
+}
+
+function mergeStatsRows(googleRows, r2Rows) {
+  const rowsByBucket = new Map();
+
+  for (const row of googleRows) {
+    if (!isStatsRow(row)) continue;
+    rowsByBucket.set(timestampBucket(row[0]), row);
+  }
+  for (const row of r2Rows) {
+    if (!isStatsRow(row)) continue;
+    rowsByBucket.set(timestampBucket(row[0]), row);
+  }
+
+  return [...rowsByBucket.values()].sort((left, right) => right[0] - left[0]);
+}
+
+function timestampBucket(epochSeconds) {
+  return Math.floor(epochSeconds / R2_SAMPLE_INTERVAL_SECONDS) * R2_SAMPLE_INTERVAL_SECONDS;
 }
 
 async function fetchLatestWindow(url) {
@@ -223,7 +319,7 @@ function parseAfter(value) {
 
 function estimateRangeBytes(after) {
   const estimatedSampleCount =
-    Math.ceil(Math.max(0, Math.floor(Date.now() / 1000) - after) / (SAMPLE_INTERVAL_MS / 1000)) + RANGE_SAFETY_SAMPLES;
+    Math.ceil(Math.max(0, Math.floor(Date.now() / 1000) - after) / (GOOGLE_SAMPLE_INTERVAL_MS / 1000)) + RANGE_SAFETY_SAMPLES;
 
   return 1 + estimatedSampleCount * ESTIMATED_BYTES_PER_SAMPLE + RANGE_SAFETY_BYTES;
 }
@@ -283,7 +379,9 @@ function json(body, status = 200) {
 
 export const testApi = {
   DEFAULT_LATEST_STATS_RANGE_BYTES,
-  SAMPLE_INTERVAL_MS,
+  GOOGLE_SAMPLE_INTERVAL_MS,
+  R2_SAMPLE_INTERVAL_SECONDS,
+  R2_JSONL_PREFIX,
   ESTIMATED_BYTES_PER_SAMPLE,
   RANGE_SAFETY_BYTES,
   RANGE_SAFETY_SAMPLES,
@@ -299,4 +397,8 @@ export const testApi = {
   parseRowTimestampSec,
   normalizeCacheUrl,
   fetchRowsAfter,
+  fetchR2Rows,
+  dailyKeyForTimestamp,
+  parseR2Jsonl,
+  mergeStatsRows,
 };
