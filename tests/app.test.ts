@@ -182,18 +182,13 @@ async function loadStatsModule() {
 
 type LatestFunctionModule = {
   onRequestGet: (context: WaitUntilContext) => Promise<Response>;
-  testApi: {
-    parseCompletePrefixRows: (text: string) => LatestRow[];
-  };
 };
-type LatestRow = { timestamp: string; usercount: number };
 type R2BucketStub = {
   list: (options: { prefix: string; cursor?: string }) => Promise<{ objects: Array<{ key: string }>; truncated: boolean; cursor?: string }>;
   get: (key: string) => Promise<{ text: () => Promise<string> } | null>;
 };
-type LatestEnv = { GOOGLE_API_URL: string; STATS_BUCKET?: R2BucketStub };
+type LatestEnv = { STATS_BUCKET?: R2BucketStub };
 type WaitUntilContext = { request: Request; env: LatestEnv; waitUntil: (promise: Promise<unknown>) => void };
-type FetchInitWithHeaders = { headers?: { range?: string }; cf?: { cacheTtl?: number } };
 type CacheRequestLike = { url: string };
 type ArchiveManifest = {
   initial?: { file: string; period: string; rows: number; start: number | null; end: number | null };
@@ -783,10 +778,6 @@ describe("stats latest function", () => {
     return import(pathToFileURL(path.join(repoRoot, "functions/api/stats/latest.js")).href + `?t=${Date.now()}-${Math.random()}`) as Promise<LatestFunctionModule>;
   }
 
-  function makeRows(rows: LatestRow[]): string {
-    return JSON.stringify(rows);
-  }
-
   function makeR2Bucket(objects: Record<string, string> = {}): R2BucketStub {
     return {
       async list() {
@@ -802,111 +793,129 @@ describe("stats latest function", () => {
     };
   }
 
-  function makeContext(url: string, env: LatestEnv): WaitUntilContext {
+  function makeContext(url: string, env: LatestEnv = { STATS_BUCKET: makeR2Bucket() }): WaitUntilContext {
     return {
       request: new Request(url),
-      env: { ...env, STATS_BUCKET: env.STATS_BUCKET ?? makeR2Bucket() } as LatestEnv & { STATS_BUCKET: R2BucketStub },
+      env,
       waitUntil() {},
     };
   }
 
-  it("keeps existing no-arg behavior with the fixed range", async () => {
+  function stubCache() {
+    const match = vi.fn(async () => undefined);
+    const put = vi.fn(async () => undefined);
+    vi.stubGlobal("caches", { default: { match, put } });
+    return { match, put };
+  }
+
+  it("requires after", async () => {
     const mod = await loadLatestModule();
-    const rows = makeRows([
-      { timestamp: "2026-04-28 00:15:00+00", usercount: 1500 },
-      { timestamp: "2026-04-01 00:00:00+00", usercount: 1400 },
-      { timestamp: "2026-03-31 23:45:00+00", usercount: 1300 },
-    ]);
-    const fetchMock = vi.fn(async () => new Response(rows, { status: 206 }));
-    const cacheMatch = vi.fn(async () => undefined);
-    const cachePut = vi.fn(async () => undefined);
+    const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
-    vi.stubGlobal("caches", { default: { match: cacheMatch, put: cachePut } });
+    const cache = stubCache();
 
-    const response = await mod.onRequestGet(makeContext("https://mushmom.test/api/stats/latest", {
-      GOOGLE_API_URL: "https://example.test/stats.json",
-    }));
-    const body = await response.json();
+    const response = await mod.onRequestGet(makeContext("https://mushmom.test/api/stats/latest"));
 
-    expect(response.status).toBe(200);
-    const firstFetchCall = fetchMock.mock.calls[0] as unknown as [unknown, FetchInitWithHeaders?] | undefined;
-    const firstFetchInit = firstFetchCall?.[1];
-    expect(firstFetchInit?.headers?.range).toBe("bytes=0-262143");
-    expect(firstFetchInit?.cf?.cacheTtl).toBe(0);
-    expect(body.data).toEqual([[1777335300, 1500], [1743465600 + 31536000, 1400]]);
-    expect(body.completeWindow).toBe(true);
-    expect(response.headers.get("cache-control")).toBe("public, max-age=60, s-maxage=300, stale-while-revalidate=60, stale-if-error=3600");
-    expect(cachePut).toHaveBeenCalledTimes(1);
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "missing_after" });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(cache.match).not.toHaveBeenCalled();
   });
 
-  it("returns only rows newer than after and excludes equal timestamps", async () => {
+  it.each(["1.5", "-1", "abc", "9007199254740992"])("rejects invalid after %s", async (after) => {
     const mod = await loadLatestModule();
-    const rows = makeRows([
-      { timestamp: "2026-04-28 00:30:00+00", usercount: 1600 },
-      { timestamp: "2026-04-28 00:15:00+00", usercount: 1500 },
-      { timestamp: "2026-04-28 00:00:00+00", usercount: 1400 },
-    ]);
-    const fetchMock = vi.fn(async () => new Response(rows, { status: 206 }));
-    vi.stubGlobal("fetch", fetchMock);
-    vi.stubGlobal("caches", { default: { match: vi.fn(async () => undefined), put: vi.fn(async () => undefined) } });
+    vi.stubGlobal("fetch", vi.fn());
+    stubCache();
 
-    const after = Math.floor(Date.UTC(2026, 3, 28, 0, 15, 0) / 1000);
-    const response = await mod.onRequestGet(makeContext(`https://mushmom.test/api/stats/latest?after=${after}`, {
-      GOOGLE_API_URL: "https://example.test/stats.json",
-    }));
-    const body = await response.json();
+    const response = await mod.onRequestGet(makeContext(`https://mushmom.test/api/stats/latest?after=${after}`));
 
-    expect(response.status).toBe(200);
-    expect(body.after).toBe(after);
-    expect(body.data).toEqual([[1777336200, 1600]]);
-    expect(body.data[0][0]).toBe(Math.floor(Date.UTC(2026, 3, 28, 0, 30, 0) / 1000));
-    expect(body.completeWindow).toBe(true);
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "invalid_after" });
   });
 
-  it("combines Google and R2 rows with R2 winning each five-minute bucket", async () => {
+  it("returns R2 rows strictly after the cursor, deduplicated and newest-first", async () => {
     const mod = await loadLatestModule();
-    const rows = makeRows([
-      { timestamp: "2026-07-03 00:10:04+00", usercount: 1800 },
-      { timestamp: "2026-07-03 00:05:04+00", usercount: 1500 },
-      { timestamp: "2026-07-03 00:00:04+00", usercount: 1400 },
-      { timestamp: "2026-07-02 23:55:00+00", usercount: 1300 },
-    ]);
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(rows, { status: 206 })));
-    vi.stubGlobal("caches", { default: { match: vi.fn(async () => undefined), put: vi.fn(async () => undefined) } });
-    const after = Math.floor(Date.UTC(2026, 6, 2, 23, 55, 0) / 1000);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    stubCache();
+    const after = Math.floor(Date.UTC(2026, 6, 3, 0, 0, 0) / 1000);
     const bucket = makeR2Bucket({
-      "stats/jsonl/2026-07-03.jsonl": "[1783036800,1600]\n[1783037100,1700]\n",
+      "stats/jsonl/2026-07-02.jsonl": `[${after - 1},1200]\n`,
+      "stats/jsonl/2026-07-03.jsonl": `[${after + 600},1800]\n[${after},1500]\n[${after + 300},1600]\n`,
+      "stats/jsonl/2026-07-04.jsonl": `[${after + 300},1700]\n[${after + 900},1900]\n`,
     });
 
-    const response = await mod.onRequestGet(makeContext(`https://mushmom.test/api/stats/latest?after=${after}`, {
-      GOOGLE_API_URL: "https://example.test/stats.json",
-      STATS_BUCKET: bucket,
-    }));
+    const response = await mod.onRequestGet(makeContext(
+      `https://mushmom.test/api/stats/latest?after=${after}`,
+      { STATS_BUCKET: bucket },
+    ));
     const body = await response.json();
 
     expect(response.status).toBe(200);
-    expect(body.source).toBe("Google API + R2");
+    expect(body).toMatchObject({
+      source: "R2",
+      sourceUrl: null,
+      after,
+      completeWindow: true,
+    });
+    expect(body.fetchedAt).toEqual(expect.any(String));
     expect(body.data).toEqual([
-      [1783037404, 1800],
-      [1783037100, 1700],
-      [1783036800, 1600],
+      [after + 900, 1900],
+      [after + 600, 1800],
+      [after + 300, 1700],
     ]);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("fails clearly when an R2 daily object contains invalid JSONL", async () => {
+  it("walks paginated R2 listings", async () => {
     const mod = await loadLatestModule();
-    const rows = makeRows([
-      { timestamp: "2026-07-03 00:00:04+00", usercount: 1400 },
-      { timestamp: "2026-07-02 23:55:00+00", usercount: 1300 },
-    ]);
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(rows, { status: 206 })));
-    vi.stubGlobal("caches", { default: { match: vi.fn(async () => undefined), put: vi.fn(async () => undefined) } });
-    const after = Math.floor(Date.UTC(2026, 6, 2, 23, 55, 0) / 1000);
+    vi.stubGlobal("fetch", vi.fn());
+    stubCache();
+    const after = 1783036800;
+    const list = vi.fn(async (options: { prefix: string; cursor?: string }) => options.cursor
+      ? { objects: [{ key: "stats/jsonl/2026-07-04.jsonl" }], truncated: false }
+      : { objects: [{ key: "stats/jsonl/2026-07-03.jsonl" }], truncated: true, cursor: "page-2" });
+    const values: Record<string, string> = {
+      "stats/jsonl/2026-07-03.jsonl": `[${after + 300},1600]`,
+      "stats/jsonl/2026-07-04.jsonl": `[${after + 600},1700]`,
+    };
+    const bucket: R2BucketStub = {
+      list,
+      async get(key) { return { async text() { return values[key]; } }; },
+    };
 
-    const response = await mod.onRequestGet(makeContext(`https://mushmom.test/api/stats/latest?after=${after}`, {
-      GOOGLE_API_URL: "https://example.test/stats.json",
-      STATS_BUCKET: makeR2Bucket({ "stats/jsonl/2026-07-03.jsonl": "not-json\n" }),
-    }));
+    const response = await mod.onRequestGet(makeContext(
+      `https://mushmom.test/api/stats/latest?after=${after}`,
+      { STATS_BUCKET: bucket },
+    ));
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).data).toEqual([[after + 600, 1700], [after + 300, 1600]]);
+    expect(list).toHaveBeenNthCalledWith(1, { prefix: "stats/jsonl/" });
+    expect(list).toHaveBeenNthCalledWith(2, { prefix: "stats/jsonl/", cursor: "page-2" });
+  });
+
+  it("returns an empty successful window when R2 has no newer rows", async () => {
+    const mod = await loadLatestModule();
+    vi.stubGlobal("fetch", vi.fn());
+    stubCache();
+
+    const response = await mod.onRequestGet(makeContext("https://mushmom.test/api/stats/latest?after=1783036800"));
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).data).toEqual([]);
+  });
+
+  it("fails clearly when an R2 daily object contains malformed JSONL", async () => {
+    const mod = await loadLatestModule();
+    vi.stubGlobal("fetch", vi.fn());
+    stubCache();
+    const after = 1783036800;
+
+    const response = await mod.onRequestGet(makeContext(
+      `https://mushmom.test/api/stats/latest?after=${after}`,
+      { STATS_BUCKET: makeR2Bucket({ "stats/jsonl/2026-07-03.jsonl": "not-json\n" }) },
+    ));
 
     expect(response.status).toBe(502);
     await expect(response.json()).resolves.toEqual({
@@ -915,105 +924,41 @@ describe("stats latest function", () => {
     });
   });
 
-  it("returns 400 for invalid after", async () => {
+  it("returns 503 when the R2 binding is missing without requiring Google configuration", async () => {
     const mod = await loadLatestModule();
-    vi.stubGlobal("fetch", vi.fn());
-    vi.stubGlobal("caches", { default: { match: vi.fn(async () => undefined), put: vi.fn(async () => undefined) } });
-
-    const response = await mod.onRequestGet(makeContext("https://mushmom.test/api/stats/latest?after=1.5", {
-      GOOGLE_API_URL: "https://example.test/stats.json",
-    }));
-
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({ error: "invalid_after" });
-  });
-
-  it("repairs partial JSON cut mid-object", async () => {
-    const mod = await loadLatestModule();
-    const partial = makeRows([
-      { timestamp: "2026-04-28 00:30:00+00", usercount: 1600 },
-      { timestamp: "2026-04-28 00:15:00+00", usercount: 1500 },
-      { timestamp: "2026-04-27 23:30:00+00", usercount: 1400 },
-    ]).slice(0, -20);
-
-    expect(mod.testApi.parseCompletePrefixRows(partial)).toEqual([
-      { timestamp: "2026-04-28 00:30:00+00", usercount: 1600 },
-      { timestamp: "2026-04-28 00:15:00+00", usercount: 1500 },
-    ]);
-  });
-
-  it("retries with a larger dynamic range when the first partial response does not reach the boundary", async () => {
-    const mod = await loadLatestModule();
-    const now = Date.UTC(2026, 3, 29, 0, 15, 0);
-    vi.setSystemTime(new Date(now));
-    const after = Math.floor(now / 1000) - (24 * 60 * 60);
-    const first = '[{"timestamp":"2026-04-28 00:30:00+00","usercount":1600},{"timestamp":"2026-04-28 00:15:00+00","usercount":1500';
-    const format = (ms: number) => new Date(ms).toISOString().replace('T', ' ').replace('Z', '+00').slice(0, 19) + '+00';
-    const second = makeRows([
-      { timestamp: format(now), usercount: 1700 },
-      { timestamp: format(now - 15 * 60 * 1000), usercount: 1600 },
-      { timestamp: format(after * 1000), usercount: 1500 },
-    ]);
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce(new Response(first, { status: 206 }))
-      .mockResolvedValueOnce(new Response(second, { status: 206 }));
+    const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
-    vi.stubGlobal("caches", { default: { match: vi.fn(async () => undefined), put: vi.fn(async () => undefined) } });
+    stubCache();
 
-    const response = await mod.onRequestGet(makeContext(`https://mushmom.test/api/stats/latest?after=${after}`, {
-      GOOGLE_API_URL: "https://example.test/stats.json",
-    }));
-    const body = await response.json();
+    const response = await mod.onRequestGet(makeContext(
+      "https://mushmom.test/api/stats/latest?after=1783036800",
+      {},
+    ));
 
-    expect(response.status).toBe(200);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    const firstFetchCall = fetchMock.mock.calls[0] as unknown as [unknown, FetchInitWithHeaders?] | undefined;
-    const secondFetchCall = fetchMock.mock.calls[1] as unknown as [unknown, FetchInitWithHeaders?] | undefined;
-    const firstRange = firstFetchCall?.[1]?.headers?.range;
-    const secondRange = secondFetchCall?.[1]?.headers?.range;
-    expect(firstRange).not.toBe(secondRange);
-    expect(body.data.length).toBe(2);
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      error: "STATS_BUCKET is not configured.",
+      data: [],
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("returns 413 when after is too old", async () => {
+  it("normalizes the cache key to after and ignores unrelated query params", async () => {
     const mod = await loadLatestModule();
-    vi.stubGlobal("fetch", vi.fn());
-    vi.stubGlobal("caches", { default: { match: vi.fn(async () => undefined), put: vi.fn(async () => undefined) } });
-
-    const response = await mod.onRequestGet(makeContext("https://mushmom.test/api/stats/latest?after=0", {
-      GOOGLE_API_URL: "https://example.test/stats.json",
-    }));
-
-    expect(response.status).toBe(413);
-    await expect(response.json()).resolves.toEqual({ error: "after_too_old" });
-  });
-
-  it("normalizes the cache key to ignore unrelated query params", async () => {
-    const mod = await loadLatestModule();
-    const rows = makeRows([
-      { timestamp: "2026-04-28 00:30:00+00", usercount: 1600 },
-      { timestamp: "2026-04-28 00:15:00+00", usercount: 1500 },
-      { timestamp: "2026-04-28 00:00:00+00", usercount: 1400 },
-    ]);
-    const fetchMock = vi.fn(async () => new Response(rows, { status: 206 }));
-    const cacheMatch = vi.fn(async () => undefined);
-    const cachePut = vi.fn(async () => undefined);
+    const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
-    vi.stubGlobal("caches", { default: { match: cacheMatch, put: cachePut } });
+    const cache = stubCache();
 
     const after = Math.floor(Date.UTC(2026, 3, 28, 0, 15, 0) / 1000);
-    await mod.onRequestGet(makeContext(`https://mushmom.test/api/stats/latest?foo=1&after=${after}&bar=2`, {
-      GOOGLE_API_URL: "https://example.test/stats.json",
-    }));
-    await mod.onRequestGet(makeContext("https://mushmom.test/api/stats/latest?foo=1", {
-      GOOGLE_API_URL: "https://example.test/stats.json",
-    }));
+    const response = await mod.onRequestGet(makeContext(
+      `https://mushmom.test/api/stats/latest?foo=1&after=0${after}&bar=2`,
+    ));
 
-    const firstCacheMatchCall = cacheMatch.mock.calls[0] as unknown as [CacheRequestLike?] | undefined;
-    const firstCachePutCall = cachePut.mock.calls[0] as unknown as [CacheRequestLike?] | undefined;
-    const secondCacheMatchCall = cacheMatch.mock.calls[1] as unknown as [CacheRequestLike?] | undefined;
+    const firstCacheMatchCall = cache.match.mock.calls[0] as unknown as [CacheRequestLike?] | undefined;
+    const firstCachePutCall = cache.put.mock.calls[0] as unknown as [CacheRequestLike?] | undefined;
     expect(firstCacheMatchCall?.[0]?.url).toBe(`https://mushmom.test/api/stats/latest?after=${after}`);
     expect(firstCachePutCall?.[0]?.url).toBe(`https://mushmom.test/api/stats/latest?after=${after}`);
-    expect(secondCacheMatchCall?.[0]?.url).toBe("https://mushmom.test/api/stats/latest");
+    expect(response.headers.get("cache-control")).toBe("public, max-age=60, s-maxage=300, stale-while-revalidate=60, stale-if-error=3600");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

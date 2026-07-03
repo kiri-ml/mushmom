@@ -592,7 +592,7 @@ async function fetchHistoricalStats(): Promise<void> {
     normalizePayload,
     onInitial: ({ points, latestPayload }) => {
       allPoints = points;
-      historicalSource = { name: (latestPayload as HistoricalSourcePayload).source || "Google API", url: (latestPayload as HistoricalSourcePayload).sourceUrl || null };
+      historicalSource = { name: (latestPayload as HistoricalSourcePayload).source || "R2", url: (latestPayload as HistoricalSourcePayload).sourceUrl || null };
       updateHistoricalMetrics(allPoints, historicalSource.name, historicalSource.url);
       render();
     },
