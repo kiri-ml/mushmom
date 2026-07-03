@@ -163,7 +163,7 @@ function parseTimestamp(value: unknown): Date | null {
 
 function isKnownBadPoint(point: StatsPoint): boolean {
   const time = point.date?.getTime();
-  return !Number.isFinite(time) || (time >= KNOWN_BAD_GAP_START && time < KNOWN_BAD_GAP_END) || point.count <= 1;
+  return !Number.isFinite(time) || (time >= KNOWN_BAD_GAP_START && time < KNOWN_BAD_GAP_END) || point.count < 0;
 }
 
 function normalizePayload(payload: StatsPayload): StatsPoint[] {
@@ -180,9 +180,10 @@ function normalizePayload(payload: StatsPayload): StatsPoint[] {
         usercount: row.usercount ?? row.users ?? row.players ?? row.count,
       };
     })
-    .map((row): StatsPoint => ({ date: truncateDateToSecond(parseTimestamp(row.timestamp)) as Date, count: Number(row.usercount) }))
-    .filter((point) => point.date instanceof Date && Number.isFinite(point.count))
+    .map((row): { date: Date | null; count: number } => ({ date: parseTimestamp(row.timestamp), count: Number(row.usercount) }))
+    .filter((point): point is StatsPoint => point.date instanceof Date && Number.isFinite(point.count))
     .filter((point) => !isKnownBadPoint(point))
+    .map((point): StatsPoint => ({ date: truncateDateToSecond(point.date) as Date, count: point.count }))
     .sort((a, b) => a.date.getTime() - b.date.getTime());
 }
 

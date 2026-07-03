@@ -425,18 +425,20 @@ describe("app behavior", () => {
     expect(buckets[1]).toMatchObject({ min: 1400, max: 1500, samples: 2 });
   });
 
-  it("accepts compact epoch-second rows and removes only configured bad samples", async () => {
+  it("accepts compact rows and non-negative counts while removing configured bad samples", async () => {
     const { module } = await loadAppModule();
     const points = module.normalizePayload([
       { timestamp: "2020-06-15 15:30:55.663+00", usercount: 1832 },
       { timestamp: "2020-06-15 15:30:55.664+00", usercount: 1832 },
       { timestamp: "2020-06-22 00:19:46.558+00", usercount: 2045 },
       { timestamp: "2020-06-22 01:00:00.528+00", usercount: 2125 },
+      { timestamp: "2020-06-24 17:15:04.320+00", usercount: 0 },
       { timestamp: "2020-06-24 17:30:04.320+00", usercount: 1 },
       { timestamp: "2020-06-24 17:45:04.796+00", usercount: 991 },
+      { timestamp: "2020-06-24 18:00:04.796+00", usercount: -1 },
       [1776945603, 1459],
     ]);
-    expect(points.length).toBe(4);
+    expect(points.map((point) => point.count)).toEqual([1832, 2125, 0, 1, 991, 1459]);
   });
 
   it("rerenders timeline axis labels with the selected locale", async () => {
