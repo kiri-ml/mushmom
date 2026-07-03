@@ -1,0 +1,14 @@
+name = "mushmom-stats"
+main = "src/index.ts"
+compatibility_date = "2026-04-23"
+
+[vars]
+CURRENT_USERS_URL = "https://legends.ml/api/get_online_users"
+SAMPLE_INTERVAL_SECONDS = 300
+
+[[r2_buckets]]
+binding = "STATS_BUCKET"
+bucket_name = "mushmom-stats"
+
+[triggers]
+crons = ["*/5 * * * *"]

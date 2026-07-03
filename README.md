@@ -114,3 +114,33 @@ wrangler pages deploy dist --project-name mushmom
 Cloudflare Pages should use:
 - output directory: `dist`
 - Pages Functions directory: `functions/`
+
+## Stats Worker and R2
+
+Create the R2 bucket and configure the admin secret:
+
+```sh
+npx wrangler r2 bucket create mushmom-stats
+npx wrangler secret put ADMIN_TOKEN --config workers/stats/wrangler.toml
+```
+
+For local manual sync testing, put `ADMIN_TOKEN="your-token"` in
+`workers/stats/.dev.vars`, then run:
+
+```sh
+npx wrangler dev --config workers/stats/wrangler.toml
+curl -X POST -H "Authorization: Bearer your-token" http://127.0.0.1:8787/admin/sync
+```
+
+Deploy the Worker (the five-minute cron is defined in its Wrangler config):
+
+```sh
+npx wrangler deploy --config workers/stats/wrangler.toml
+```
+
+Run the Worker tests and TypeScript checks:
+
+```sh
+npm test -- workers/stats
+npm run typecheck
+```
