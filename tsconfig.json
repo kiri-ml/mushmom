@@ -22,6 +22,7 @@
   },
   "include": [
     "src/**/*.ts",
+    "functions/**/*.ts",
     "tests/**/*.ts",
     "workers/**/*.ts"
   ]
