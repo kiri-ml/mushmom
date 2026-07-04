@@ -1,8 +1,9 @@
 /// <reference path="./globals.d.ts" />
 
 import bundledManifest from "./assets/stats/manifests.json";
+import { currentUtcMonthKey, isMonthKey, monthKeysAfter } from "./stats-months";
 
-const DEFAULT_LATEST_URL = "/api/stats/latest";
+const DEFAULT_STATS_API_BASE_URL = "/api/stats/";
 const DEFAULT_ARCHIVE_BASE_URL = "/assets/stats/";
 
 type HistoryFetcher = (url: string) => Promise<unknown>;
@@ -15,7 +16,7 @@ interface ArchiveFetchOptions<TPoint> {
 }
 
 interface LoadArchiveChunksOptions<TPoint> extends ArchiveFetchOptions<TPoint> {
-  latestPayload: StatsPayload;
+  recentPayload: StatsPayload;
   manifest: StatsManifest;
   onArchive?: (payload: ArchiveStatsHistoryResult<TPoint>) => void;
 }
@@ -30,28 +31,25 @@ async function fetchJson(url: string): Promise<unknown> {
 async function loadInitialStatsHistory<TPoint>(options: LoadInitialStatsHistoryOptions<TPoint>): Promise<InitialStatsHistoryResult<TPoint>> {
   const {
     archiveBaseUrl = DEFAULT_ARCHIVE_BASE_URL,
-    latestUrl = DEFAULT_LATEST_URL,
+    statsApiBaseUrl = DEFAULT_STATS_API_BASE_URL,
     manifest = bundledManifest as StatsManifest,
     normalizePayload,
     onInitial,
     fetcher = fetchJson,
   } = options;
 
-  const latestPayloadRaw = await fetcher(buildLatestUrl(latestUrl, manifest));
-  const latestPayload = latestPayloadRaw as StatsPayload;
-  const latestPoints = normalizePayload(latestPayload);
+  const [recentPayload, initialArchivePoints] = await Promise.all([
+    loadRecentPayload({ statsApiBaseUrl, manifest, fetcher }),
+    loadInitialArchive({ archiveBaseUrl, fetcher, manifest, normalizePayload }),
+  ]);
+  const recentPoints = normalizePayload(recentPayload);
+  const points = [...initialArchivePoints, ...recentPoints];
 
-  if (latestPoints.length === 0) {
-    throw new Error("Latest stats response contained no usable points.");
+  if (points.length === 0) {
+    throw new Error("Stats history contained no usable points.");
   }
 
-  const initialArchivePoints = await loadInitialArchive({
-    archiveBaseUrl,
-    fetcher,
-    manifest,
-    normalizePayload,
-  });
-  const result = { points: [...initialArchivePoints, ...latestPoints], latestPayload, manifest };
+  const result = { points, recentPayload, manifest };
   onInitial?.(result);
 
   return result;
@@ -61,7 +59,7 @@ async function loadArchiveStatsHistory<TPoint>(options: LoadArchiveStatsHistoryO
   const {
     archiveBaseUrl = DEFAULT_ARCHIVE_BASE_URL,
     fetcher = fetchJson,
-    latestPayload,
+    recentPayload,
     manifest,
     normalizePayload,
     onArchive,
@@ -70,7 +68,7 @@ async function loadArchiveStatsHistory<TPoint>(options: LoadArchiveStatsHistoryO
   return loadArchiveChunks({
     archiveBaseUrl,
     fetcher,
-    latestPayload,
+    recentPayload,
     manifest,
     normalizePayload,
     onArchive,
@@ -85,7 +83,7 @@ async function loadStatsHistory<TPoint>(options: LoadStatsHistoryOptions<TPoint>
   await loadArchiveStatsHistory({
     archiveBaseUrl: options.archiveBaseUrl,
     fetcher: options.fetcher,
-    latestPayload: initial.latestPayload,
+    recentPayload: initial.recentPayload,
     manifest: initial.manifest,
     normalizePayload: options.normalizePayload,
     onArchive: options.onArchive,
@@ -93,8 +91,8 @@ async function loadStatsHistory<TPoint>(options: LoadStatsHistoryOptions<TPoint>
 }
 
 async function loadArchiveChunks<TPoint>(options: LoadArchiveChunksOptions<TPoint>): Promise<ArchiveStatsHistoryResult<TPoint>> {
-  const { latestPayload, manifest, onArchive } = options;
-  const chunks = selectArchiveChunks(manifest, latestPayload);
+  const { recentPayload, manifest, onArchive } = options;
+  const chunks = selectArchiveChunks(manifest, recentPayload);
 
   if (chunks.length === 0) {
     const result = { points: [], chunks };
@@ -113,29 +111,46 @@ function absoluteUrl(path: string): URL {
   return new URL(path, window.location.origin);
 }
 
-function buildLatestUrl(latestUrl: string, manifest: StatsManifest): string {
-  const after = initialArchiveEnd(manifest);
-  if (!Number.isFinite(after)) {
-    throw new Error("Bundled stats manifest is missing a valid initial.end value.");
+function initialArchivePeriod(manifest: StatsManifest): string {
+  const period = manifest?.initial?.period;
+  if (!isMonthKey(period)) {
+    throw new Error("Bundled stats manifest is missing a valid initial.period value.");
   }
-
-  const url = absoluteUrl(latestUrl);
-  url.search = "";
-  url.searchParams.set("after", String(after));
-  return url.pathname + url.search;
+  return period;
 }
 
-function initialArchiveEnd(manifest: StatsManifest): number {
-  return Number(manifest?.initial?.end);
+function statsMonthPath(statsApiBaseUrl: string, month: string): string {
+  const base = absoluteUrl(statsApiBaseUrl);
+  base.search = "";
+  base.hash = "";
+  base.pathname = `${base.pathname.replace(/\/?$/, "/")}${month}`;
+  return base.pathname;
 }
 
-function selectArchiveChunks(manifest: StatsManifest, latestPayload: StatsPayload): StatsManifestChunk[] {
+async function loadRecentPayload(options: {
+  statsApiBaseUrl: string;
+  manifest: StatsManifest;
+  fetcher: HistoryFetcher;
+}): Promise<RawPayloadRow[]> {
+  const { statsApiBaseUrl, manifest, fetcher } = options;
+  const months = monthKeysAfter(initialArchivePeriod(manifest), currentUtcMonthKey());
+  const payloads = await Promise.all(months.map(async (month) => {
+    const payload = await fetcher(statsMonthPath(statsApiBaseUrl, month));
+    if (!Array.isArray(payload)) {
+      throw new Error(`Monthly stats response for ${month} was not an array.`);
+    }
+    return payload as RawPayloadRow[];
+  }));
+  return payloads.flat();
+}
+
+function selectArchiveChunks(manifest: StatsManifest, recentPayload: StatsPayload): StatsManifestChunk[] {
   const chunks = Array.isArray(manifest?.backfill) ? manifest.backfill : [];
-  const oldestLatest = oldestPayloadTimestamp(latestPayload);
+  const oldestRecent = oldestPayloadTimestamp(recentPayload);
 
-  if (!Number.isFinite(oldestLatest)) return chunks;
+  if (!Number.isFinite(oldestRecent)) return chunks;
 
-  return chunks.filter((chunk) => Number(chunk.end) < oldestLatest);
+  return chunks.filter((chunk) => Number(chunk.end) < oldestRecent);
 }
 
 async function loadInitialArchive<TPoint>(options: ArchiveFetchOptions<TPoint> & {

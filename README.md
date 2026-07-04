@@ -5,7 +5,7 @@ statistics. The frontend is built with Vite, Cloudflare Pages Functions live in
 `functions/`, and static passthrough assets live in `public/`.
 
 The app fetches:
-- historical data through `/api/stats/latest` plus archived chunks from `public/assets/stats/`
+- recent historical data through `/api/stats/YYYY-MM` plus archived chunks from `public/assets/stats/`
 - current online users through `/api/current`
 - bundled translations from `src/i18n/*.json`
 
@@ -56,7 +56,7 @@ npm run dev
 
 Open `http://127.0.0.1:8788`. Wrangler serves the Pages Functions in
 `functions/` and proxies frontend requests to Vite, so `/api/current` and
-`/api/stats/latest` work during local development.
+monthly `/api/stats/YYYY-MM` requests work during local development.
 
 To use different ports:
 

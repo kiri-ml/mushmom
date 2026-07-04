@@ -2,7 +2,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { bundledLocaleRegistry as localeRegistry, bundledMessages as i18nMessages } from "../src/i18n/data";
 import { buildApiPreloadTags, buildEchartsLoaderScript, CHINA_ECHARTS_CDN, GLOBAL_ECHARTS_CDN, injectStartupHtml } from "../vite.config";
@@ -108,9 +108,9 @@ function buildStatsLoader() {
   return {
     async loadStatsHistory() {},
     async loadInitialStatsHistory(options: LoadInitialStatsHistoryOptions<StatsPoint>) {
-      const latestPayload = { data: [[1776945603, 1459] as [number, number]] };
+      const recentPayload = [[1776945603, 1459] as [number, number]];
       const manifest = { initial: { file: "", end: 1775000707 }, backfill: [] };
-      const result = { points: options.normalizePayload(latestPayload), latestPayload, manifest };
+      const result = { points: options.normalizePayload(recentPayload), recentPayload, manifest };
       options.onInitial?.(result);
       return result;
     },
@@ -119,8 +119,8 @@ function buildStatsLoader() {
       options.onArchive?.(result);
       return result;
     },
-    selectArchiveChunks(manifest: { backfill?: Array<{ end: number; file: string }> }, latestPayload: { data?: Array<[number, number] | { timestamp: number }> }) {
-      const rows = Array.isArray(latestPayload?.data) ? latestPayload.data : [];
+    selectArchiveChunks(manifest: { backfill?: Array<{ end: number; file: string }> }, recentPayload: Array<[number, number] | { timestamp: number }>) {
+      const rows = Array.isArray(recentPayload) ? recentPayload : [];
       const oldestLatest = Math.min(...rows.map((row) => Number(Array.isArray(row) ? row[0] : row.timestamp)));
       return (manifest?.backfill || []).filter((chunk) => Number(chunk.end) < oldestLatest);
     },
@@ -180,16 +180,6 @@ async function loadStatsModule() {
   return { module: await import("../src/load") as StatsModule, globals };
 }
 
-type LatestFunctionModule = {
-  onRequestGet: (context: WaitUntilContext) => Promise<Response>;
-};
-type R2BucketStub = {
-  list: (options: { prefix: string; cursor?: string }) => Promise<{ objects: Array<{ key: string }>; truncated: boolean; cursor?: string }>;
-  get: (key: string) => Promise<{ text: () => Promise<string> } | null>;
-};
-type LatestEnv = { STATS_BUCKET?: R2BucketStub };
-type WaitUntilContext = { request: Request; env: LatestEnv; waitUntil: (promise: Promise<unknown>) => void };
-type CacheRequestLike = { url: string };
 type ArchiveManifest = {
   initial?: { file: string; period: string; rows: number; start: number | null; end: number | null };
   backfill: Array<{ file: string; period: string; rows: number }>;
@@ -220,6 +210,7 @@ function generateStatsArchive(rows: Array<{ timestamp: string; usercount: number
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -258,7 +249,7 @@ describe("vite migration", () => {
         tag: "link",
         attrs: {
           rel: "preload",
-          href: `/api/stats/latest?after=${statsManifest.initial.end}`,
+          href: "/api/stats/2026-07",
           as: "fetch",
           crossorigin: "",
         },
@@ -290,14 +281,14 @@ describe("vite migration", () => {
   it("injects API preloads before the ECharts loader and module startup", () => {
     const script = buildEchartsLoaderScript();
     const transformed = injectStartupHtml(indexHtml);
-    const latestPreload = `<link rel="preload" href="/api/stats/latest?after=${statsManifest.initial.end}" as="fetch" crossorigin>`;
+    const recentPreload = '<link rel="preload" href="/api/stats/2026-07" as="fetch" crossorigin>';
     const initialPreload = `<link rel="preload" href="/assets/stats/${statsManifest.initial.file}" as="fetch" crossorigin>`;
     const currentPreload = '<link rel="preload" href="/api/current" as="fetch" crossorigin>';
     expect(script).toContain(GLOBAL_ECHARTS_CDN);
     expect(script).toContain(CHINA_ECHARTS_CDN);
     expect(script).toContain("window.__mushmomEchartsReady");
     expect(script).toContain("document.head.appendChild(script)");
-    expect(transformed.indexOf(latestPreload)).toBeLessThan(transformed.indexOf(script));
+    expect(transformed.indexOf(recentPreload)).toBeLessThan(transformed.indexOf(script));
     expect(transformed.indexOf(initialPreload)).toBeLessThan(transformed.indexOf(script));
     expect(transformed.indexOf(currentPreload)).toBeLessThan(transformed.indexOf(script));
     expect(transformed.indexOf(script)).toBeLessThan(transformed.indexOf('<script type="module" src="/src/main.ts"></script>'));
@@ -531,7 +522,7 @@ describe("app behavior", () => {
     });
     const calls: string[] = [];
     const renderedOptions: unknown[] = [];
-    const latestPayload = { data: [[1777594504, 1700] as [number, number], [1775001608, 1317] as [number, number]] };
+    const recentPayload = [[1777594504, 1700] as [number, number], [1775001608, 1317] as [number, number]];
     const archivePayload = { data: [[1767224706, 1200] as [number, number]] };
     const manifest = {
       initial: { file: "", end: 1775000707 },
@@ -542,7 +533,7 @@ describe("app behavior", () => {
       async loadStatsHistory() {},
       async loadInitialStatsHistory(options: LoadInitialStatsHistoryOptions<StatsPoint>) {
         calls.push("initial");
-        const result = { points: options.normalizePayload(latestPayload), latestPayload, manifest };
+        const result = { points: options.normalizePayload(recentPayload), recentPayload, manifest };
         options.onInitial?.(result);
         return result;
       },
@@ -598,10 +589,12 @@ describe("app behavior", () => {
 
 describe("stats loader", () => {
   it("loads initial stats without fetching archive chunks", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-05T00:00:00Z"));
     const { module } = await loadStatsModule();
     const fetcher = vi.fn(async (url: string) => {
-      if (url === "/api/stats/latest?after=1775000707") {
-        return { data: [[1777594504, 1700], [1775001608, 1317]] };
+      if (url === "/api/stats/2026-07") {
+        return [[1782864000, 1700], [1782864300, 1317]];
       }
       throw new Error(`unexpected fetch: ${url}`);
     });
@@ -609,7 +602,7 @@ describe("stats loader", () => {
 
     const result = await module.loadInitialStatsHistory({
       manifest: {
-        initial: { file: "", end: 1775000707 },
+        initial: { file: "", period: "2026-06", end: 1782863104 },
         backfill: [{ file: "2025.json", end: 1767224706 }],
       },
       fetcher,
@@ -618,19 +611,21 @@ describe("stats loader", () => {
     });
 
     expect(fetcher).toHaveBeenCalledTimes(1);
-    expect(fetcher).toHaveBeenCalledWith("/api/stats/latest?after=1775000707");
+    expect(fetcher).toHaveBeenCalledWith("/api/stats/2026-07");
     expect(result.points).toHaveLength(2);
     expect(onInitial).toHaveBeenCalledWith(result);
   });
 
   it("loads manifest initial with the initial stats payload", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-05T00:00:00Z"));
     const { module } = await loadStatsModule();
     const fetcher = vi.fn(async (url: string) => {
-      if (url === "/api/stats/latest?after=1775000707") {
-        return { data: [[1777594504, 1700], [1775001608, 1317]] };
+      if (url === "/api/stats/2026-07") {
+        return [[1782864000, 1700], [1782864300, 1317]];
       }
-      if (url === "/assets/stats/2026-03.json") {
-        return { data: [[1775000707, 1300]] };
+      if (url === "/assets/stats/2026-06.json") {
+        return { data: [[1782863104, 1300]] };
       }
       throw new Error(`unexpected fetch: ${url}`);
     });
@@ -638,7 +633,7 @@ describe("stats loader", () => {
 
     const result = await module.loadInitialStatsHistory({
       manifest: {
-        initial: { file: "2026-03.json", end: 1775000707 },
+        initial: { file: "2026-06.json", period: "2026-06", end: 1782863104 },
         backfill: [{ file: "2025.json", end: 1767224706 }],
       },
       fetcher,
@@ -646,9 +641,9 @@ describe("stats loader", () => {
       onInitial,
     });
 
-    expect(fetcher).toHaveBeenCalledWith("/api/stats/latest?after=1775000707");
-    expect(fetcher).toHaveBeenCalledWith("/assets/stats/2026-03.json");
-    expect(result.points).toEqual([[1775000707, 1300], [1777594504, 1700], [1775001608, 1317]]);
+    expect(fetcher).toHaveBeenCalledWith("/api/stats/2026-07");
+    expect(fetcher).toHaveBeenCalledWith("/assets/stats/2026-06.json");
+    expect(result.points).toEqual([[1782863104, 1300], [1782864000, 1700], [1782864300, 1317]]);
     expect(onInitial).toHaveBeenCalledWith(result);
   });
 
@@ -670,7 +665,7 @@ describe("stats loader", () => {
           { file: "2026-04.json", end: 1777592707 },
         ],
       },
-      latestPayload: { data: [[1777594504, 1700], [1775001608, 1317]] },
+      recentPayload: [[1777594504, 1700], [1775001608, 1317]],
       fetcher,
       normalizePayload: (payload) => Array.isArray(payload) ? payload : Array.isArray(payload.data) ? payload.data : [],
       onArchive,
@@ -684,14 +679,15 @@ describe("stats loader", () => {
   });
 
   it("uses the bundled manifest without fetching manifests.json", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-05T00:00:00Z"));
     const { module } = await loadStatsModule();
-    const manifestAfter = Number(statsManifest.initial.end);
-    const oldestLatest = manifestAfter + 1;
-    const latestPayload = { data: [[oldestLatest + 3600, 1700], [oldestLatest, 1317]] };
-    const expectedArchiveChunks = (statsManifest.backfill ?? []).filter((chunk) => Number(chunk.end) < oldestLatest);
+    const oldestRecent = Number(statsManifest.initial.end) + 1;
+    const recentPayload = [[oldestRecent, 1317], [oldestRecent + 3600, 1700]];
+    const expectedArchiveChunks = (statsManifest.backfill ?? []).filter((chunk) => Number(chunk.end) < oldestRecent);
     const fetcher = vi.fn(async (url: string) => {
-      if (url === `/api/stats/latest?after=${manifestAfter}`) {
-        return latestPayload;
+      if (url === "/api/stats/2026-07") {
+        return recentPayload;
       }
       if (url.startsWith("/assets/stats/")) {
         return { data: [] };
@@ -708,7 +704,7 @@ describe("stats loader", () => {
       onArchive,
     });
 
-    expect(fetcher).toHaveBeenCalledWith(`/api/stats/latest?after=${manifestAfter}`);
+    expect(fetcher).toHaveBeenCalledWith("/api/stats/2026-07");
     expect(fetcher).not.toHaveBeenCalledWith("/assets/stats/manifests.json");
     expect(onInitial).toHaveBeenCalledTimes(1);
     expect(onInitial.mock.calls[0]?.[0]?.manifest?.backfill?.length).toBeGreaterThan(0);
@@ -716,14 +712,14 @@ describe("stats loader", () => {
     const archiveCall = onArchive.mock.calls[0]?.[0];
     const selectedChunks = archiveCall?.chunks ?? [];
     expect(selectedChunks.map((chunk: { file: string }) => chunk.file)).toEqual(expectedArchiveChunks.map((chunk) => chunk.file));
-    expect(selectedChunks.every((chunk: { end?: number | string }) => Number(chunk.end) < oldestLatest)).toBe(true);
+    expect(selectedChunks.every((chunk: { end?: number | string }) => Number(chunk.end) < oldestRecent)).toBe(true);
   });
 
-  it("skips archive chunks overlapping latest payload", async () => {
+  it("skips archive chunks overlapping recent payload", async () => {
     const { module } = await loadStatsModule();
     const chunks = module.selectArchiveChunks(
       { backfill: [{ file: "2025.json", end: 1767224700 }, { file: "2026-03.json", end: 1775000707 }, { file: "2026-04.json", end: 1777592707 }] },
-      { data: [[1777594504, 1700], [1775001608, 1317]] },
+      [[1777594504, 1700], [1775001608, 1317]],
     );
     expect(chunks.map((chunk) => chunk.file)).toEqual(["2025.json", "2026-03.json"]);
   });
@@ -735,230 +731,89 @@ describe("stats loader", () => {
         initial: { file: "2026-03.json", end: 1775000707 },
         backfill: [{ file: "2025.json", end: 1767224700 }],
       },
-      { data: [[1777594504, 1700], [1775001608, 1317]] },
+      [[1777594504, 1700], [1775001608, 1317]],
     );
     expect(chunks.map((chunk) => chunk.file)).toEqual(["2025.json"]);
   });
 
-  it("uses manifest initial.end for latest fetch", async () => {
+  it("fetches every month after the manifest period through the current UTC month", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-05T00:00:00Z"));
     const { module } = await loadStatsModule();
     const fetcher = vi.fn(async (url: string) => {
-      if (url === "/api/stats/latest?after=1775000707") {
-        return { data: [[1777594504, 1700]] };
+      if (url === "/custom/stats/2026-07") {
+        return [[1782864000, 1700]];
       }
-      return { data: [] };
+      if (url === "/custom/stats/2026-08") {
+        return [[1785542400, 1800]];
+      }
+      throw new Error(`unexpected fetch: ${url}`);
     });
 
     await module.loadStatsHistory({
-      manifest: { initial: { file: "", end: 1775000707 }, backfill: [] },
+      statsApiBaseUrl: "/custom/stats",
+      manifest: { initial: { file: "", period: "2026-06", end: 1782863104 }, backfill: [] },
       fetcher,
       normalizePayload: (payload) => Array.isArray(payload) ? payload : Array.isArray(payload.data) ? payload.data : [],
     });
 
-    expect(fetcher).toHaveBeenCalledWith("/api/stats/latest?after=1775000707");
+    expect(fetcher).toHaveBeenCalledWith("/custom/stats/2026-07");
+    expect(fetcher).toHaveBeenCalledWith("/custom/stats/2026-08");
   });
 
-  it("throws when bundled manifest is missing a valid initial.end", async () => {
+  it("uses the initial archive when recent monthly responses are empty", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-05T00:00:00Z"));
     const { module } = await loadStatsModule();
-    const fetcher = vi.fn(async () => ({ data: [[1777594504, 1700]] }));
+    const fetcher = vi.fn(async (url: string) => {
+      if (url === "/api/stats/2026-07") return [];
+      if (url === "/assets/stats/2026-06.json") return { data: [[1782863104, 1300]] };
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+
+    const result = await module.loadInitialStatsHistory({
+      manifest: {
+        initial: { file: "2026-06.json", period: "2026-06", end: 1782863104 },
+        backfill: [],
+      },
+      fetcher,
+      normalizePayload: (payload) => Array.isArray(payload) ? payload : Array.isArray(payload.data) ? payload.data : [],
+    });
+
+    expect(result.points).toEqual([[1782863104, 1300]]);
+    expect(result.recentPayload).toEqual([]);
+  });
+
+  it("rejects invalid monthly response shapes and completely empty history", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-05T00:00:00Z"));
+    const { module } = await loadStatsModule();
+    const manifest = { initial: { file: "", period: "2026-06", end: 1782863104 }, backfill: [] };
+    const normalizePayload = (payload: StatsPayload) => Array.isArray(payload) ? payload : Array.isArray(payload.data) ? payload.data : [];
+
+    await expect(module.loadInitialStatsHistory({
+      manifest,
+      fetcher: async () => ({ data: [] }),
+      normalizePayload,
+    })).rejects.toThrow("Monthly stats response for 2026-07 was not an array.");
+
+    await expect(module.loadInitialStatsHistory({
+      manifest,
+      fetcher: async () => [],
+      normalizePayload,
+    })).rejects.toThrow("Stats history contained no usable points.");
+  });
+
+  it("throws when bundled manifest is missing a valid initial.period", async () => {
+    const { module } = await loadStatsModule();
+    const fetcher = vi.fn(async () => [[1777594504, 1700]]);
 
     await expect(module.loadStatsHistory({
       manifest: { backfill: [] },
       fetcher,
       normalizePayload: (payload) => Array.isArray(payload) ? payload : Array.isArray(payload.data) ? payload.data : [],
-    })).rejects.toThrow("Bundled stats manifest is missing a valid initial.end value.");
+    })).rejects.toThrow("Bundled stats manifest is missing a valid initial.period value.");
 
     expect(fetcher).not.toHaveBeenCalled();
-  });
-});
-
-
-describe("stats latest function", () => {
-  async function loadLatestModule(): Promise<LatestFunctionModule> {
-    return import(pathToFileURL(path.join(repoRoot, "functions/api/stats/latest.js")).href + `?t=${Date.now()}-${Math.random()}`) as Promise<LatestFunctionModule>;
-  }
-
-  function makeR2Bucket(objects: Record<string, string> = {}): R2BucketStub {
-    return {
-      async list() {
-        return {
-          objects: Object.keys(objects).map((key) => ({ key })),
-          truncated: false,
-        };
-      },
-      async get(key: string) {
-        const value = objects[key];
-        return value === undefined ? null : { async text() { return value; } };
-      },
-    };
-  }
-
-  function makeContext(url: string, env: LatestEnv = { STATS_BUCKET: makeR2Bucket() }): WaitUntilContext {
-    return {
-      request: new Request(url),
-      env,
-      waitUntil() {},
-    };
-  }
-
-  function stubCache() {
-    const match = vi.fn(async () => undefined);
-    const put = vi.fn(async () => undefined);
-    vi.stubGlobal("caches", { default: { match, put } });
-    return { match, put };
-  }
-
-  it("requires after", async () => {
-    const mod = await loadLatestModule();
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-    const cache = stubCache();
-
-    const response = await mod.onRequestGet(makeContext("https://mushmom.test/api/stats/latest"));
-
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({ error: "missing_after" });
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(cache.match).not.toHaveBeenCalled();
-  });
-
-  it.each(["1.5", "-1", "abc", "9007199254740992"])("rejects invalid after %s", async (after) => {
-    const mod = await loadLatestModule();
-    vi.stubGlobal("fetch", vi.fn());
-    stubCache();
-
-    const response = await mod.onRequestGet(makeContext(`https://mushmom.test/api/stats/latest?after=${after}`));
-
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({ error: "invalid_after" });
-  });
-
-  it("returns R2 rows strictly after the cursor, deduplicated and newest-first", async () => {
-    const mod = await loadLatestModule();
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-    stubCache();
-    const after = Math.floor(Date.UTC(2026, 6, 3, 0, 0, 0) / 1000);
-    const bucket = makeR2Bucket({
-      "stats/jsonl/2026-07-02.jsonl": `[${after - 1},1200]\n`,
-      "stats/jsonl/2026-07-03.jsonl": `[${after + 600},1800]\n[${after},1500]\n[${after + 300},1600]\n`,
-      "stats/jsonl/2026-07-04.jsonl": `[${after + 300},1700]\n[${after + 900},1900]\n`,
-    });
-
-    const response = await mod.onRequestGet(makeContext(
-      `https://mushmom.test/api/stats/latest?after=${after}`,
-      { STATS_BUCKET: bucket },
-    ));
-    const body = await response.json();
-
-    expect(response.status).toBe(200);
-    expect(body).toMatchObject({
-      source: "R2",
-      sourceUrl: null,
-      after,
-      completeWindow: true,
-    });
-    expect(body.fetchedAt).toEqual(expect.any(String));
-    expect(body.data).toEqual([
-      [after + 900, 1900],
-      [after + 600, 1800],
-      [after + 300, 1700],
-    ]);
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("walks paginated R2 listings", async () => {
-    const mod = await loadLatestModule();
-    vi.stubGlobal("fetch", vi.fn());
-    stubCache();
-    const after = 1783036800;
-    const list = vi.fn(async (options: { prefix: string; cursor?: string }) => options.cursor
-      ? { objects: [{ key: "stats/jsonl/2026-07-04.jsonl" }], truncated: false }
-      : { objects: [{ key: "stats/jsonl/2026-07-03.jsonl" }], truncated: true, cursor: "page-2" });
-    const values: Record<string, string> = {
-      "stats/jsonl/2026-07-03.jsonl": `[${after + 300},1600]`,
-      "stats/jsonl/2026-07-04.jsonl": `[${after + 600},1700]`,
-    };
-    const bucket: R2BucketStub = {
-      list,
-      async get(key) { return { async text() { return values[key]; } }; },
-    };
-
-    const response = await mod.onRequestGet(makeContext(
-      `https://mushmom.test/api/stats/latest?after=${after}`,
-      { STATS_BUCKET: bucket },
-    ));
-
-    expect(response.status).toBe(200);
-    expect((await response.json()).data).toEqual([[after + 600, 1700], [after + 300, 1600]]);
-    expect(list).toHaveBeenNthCalledWith(1, { prefix: "stats/jsonl/" });
-    expect(list).toHaveBeenNthCalledWith(2, { prefix: "stats/jsonl/", cursor: "page-2" });
-  });
-
-  it("returns an empty successful window when R2 has no newer rows", async () => {
-    const mod = await loadLatestModule();
-    vi.stubGlobal("fetch", vi.fn());
-    stubCache();
-
-    const response = await mod.onRequestGet(makeContext("https://mushmom.test/api/stats/latest?after=1783036800"));
-
-    expect(response.status).toBe(200);
-    expect((await response.json()).data).toEqual([]);
-  });
-
-  it("fails clearly when an R2 daily object contains malformed JSONL", async () => {
-    const mod = await loadLatestModule();
-    vi.stubGlobal("fetch", vi.fn());
-    stubCache();
-    const after = 1783036800;
-
-    const response = await mod.onRequestGet(makeContext(
-      `https://mushmom.test/api/stats/latest?after=${after}`,
-      { STATS_BUCKET: makeR2Bucket({ "stats/jsonl/2026-07-03.jsonl": "not-json\n" }) },
-    ));
-
-    expect(response.status).toBe(502);
-    await expect(response.json()).resolves.toEqual({
-      error: "Invalid R2 JSONL in stats/jsonl/2026-07-03.jsonl at line 1: malformed JSON.",
-      data: [],
-    });
-  });
-
-  it("returns 503 when the R2 binding is missing without requiring Google configuration", async () => {
-    const mod = await loadLatestModule();
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-    stubCache();
-
-    const response = await mod.onRequestGet(makeContext(
-      "https://mushmom.test/api/stats/latest?after=1783036800",
-      {},
-    ));
-
-    expect(response.status).toBe(503);
-    await expect(response.json()).resolves.toEqual({
-      error: "STATS_BUCKET is not configured.",
-      data: [],
-    });
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("normalizes the cache key to after and ignores unrelated query params", async () => {
-    const mod = await loadLatestModule();
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-    const cache = stubCache();
-
-    const after = Math.floor(Date.UTC(2026, 3, 28, 0, 15, 0) / 1000);
-    const response = await mod.onRequestGet(makeContext(
-      `https://mushmom.test/api/stats/latest?foo=1&after=0${after}&bar=2`,
-    ));
-
-    const firstCacheMatchCall = cache.match.mock.calls[0] as unknown as [CacheRequestLike?] | undefined;
-    const firstCachePutCall = cache.put.mock.calls[0] as unknown as [CacheRequestLike?] | undefined;
-    expect(firstCacheMatchCall?.[0]?.url).toBe(`https://mushmom.test/api/stats/latest?after=${after}`);
-    expect(firstCachePutCall?.[0]?.url).toBe(`https://mushmom.test/api/stats/latest?after=${after}`);
-    expect(response.headers.get("cache-control")).toBe("public, max-age=60, s-maxage=300, stale-while-revalidate=60, stale-if-error=3600");
-    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

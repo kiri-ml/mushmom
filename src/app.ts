@@ -590,9 +590,9 @@ async function fetchHistoricalStats(): Promise<void> {
   if (!loader) throw new Error(tr("error.statsLoaderUnavailable"));
   const initial = await loader.loadInitialStatsHistory<StatsPoint>({
     normalizePayload,
-    onInitial: ({ points, latestPayload }) => {
+    onInitial: ({ points, recentPayload }) => {
       allPoints = points;
-      historicalSource = { name: (latestPayload as HistoricalSourcePayload).source || "R2", url: (latestPayload as HistoricalSourcePayload).sourceUrl || null };
+      historicalSource = { name: (recentPayload as HistoricalSourcePayload).source || "R2", url: (recentPayload as HistoricalSourcePayload).sourceUrl || null };
       updateHistoricalMetrics(allPoints, historicalSource.name, historicalSource.url);
       render();
     },
@@ -601,7 +601,7 @@ async function fetchHistoricalStats(): Promise<void> {
   await (globalThis.__mushmomEchartsReady || Promise.resolve());
 
   await loader.loadArchiveStatsHistory<StatsPoint>({
-    latestPayload: initial.latestPayload,
+    recentPayload: initial.recentPayload,
     manifest: initial.manifest,
     normalizePayload,
     onArchive: ({ points }) => {

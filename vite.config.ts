@@ -1,13 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { defineConfig, type HtmlTagDescriptor } from "vite";
+import { nextMonthKey } from "./src/stats-months";
 
 const wranglerPort = process.env.WRANGLER_PORT || "8788";
 
 type StatsManifest = {
   initial?: {
-    end?: number | string | null;
     file?: string | null;
+    period?: string | null;
   };
 };
 
@@ -77,10 +78,7 @@ function injectStartupHtml(html: string): string {
 
 function buildApiPreloadTags(): HtmlTagDescriptor[] {
   const manifest = readStatsManifest();
-  const after = Number(manifest.initial?.end);
-  if (!Number.isFinite(after)) {
-    throw new Error("Stats manifest is missing a valid initial.end value.");
-  }
+  const firstRecentMonth = nextMonthKey(manifest.initial?.period || "");
   const initialFile = manifest.initial?.file;
   if (!initialFile) {
     throw new Error("Stats manifest is missing a valid initial.file value.");
@@ -91,7 +89,7 @@ function buildApiPreloadTags(): HtmlTagDescriptor[] {
       tag: "link",
       attrs: {
         rel: "preload",
-        href: `/api/stats/latest?after=${after}`,
+        href: `/api/stats/${firstRecentMonth}`,
         as: "fetch",
         crossorigin: "",
       },
