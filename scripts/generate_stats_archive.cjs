@@ -1,147 +1,173 @@
 #!/usr/bin/env node
 
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 
+const LEGACY_SOURCE = "https://storage.googleapis.com/geospiza/query/maplelegends-online-count.json";
+const CUTOVER_EPOCH = 1782864000;
+const DATASET = "maplelegends-online-users";
 const DEFAULT_OUTPUT_DIR = "public/assets/stats";
 const DEFAULT_BUNDLED_MANIFEST_PATH = "src/assets/stats/manifests.json";
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
-  const defaultSource = process.env.GOOGLE_API_URL || readDevVar("GOOGLE_API_URL");
-  const source = options.source || (options.jsonlDir ? "" : defaultSource);
   const outputDir = path.resolve(process.cwd(), options.output || DEFAULT_OUTPUT_DIR);
   const jsonlDir = options.jsonlDir ? path.resolve(process.cwd(), options.jsonlDir) : null;
-
-  if (!source && !jsonlDir) {
-    throw new Error("Pass --jsonl-dir or provide a JSON source with --source or GOOGLE_API_URL.");
-  }
-
-  const jsonlRows = jsonlDir ? readJsonlDirectory(jsonlDir) : [];
-  const payload = source
-    ? await readJson(source)
-    : { data: readExistingArchiveRows(outputDir) };
-  const { chunks } = generateArchive(payload, outputDir, jsonlRows);
-
-  console.log(
-    `Generated ${chunks.length} stats archive chunks in ${path.relative(process.cwd(), outputDir)}`,
-  );
+  const legacyPayloadPromise = readJson(LEGACY_SOURCE);
+  const r2Rows = jsonlDir ? readJsonlDirectory(jsonlDir) : [];
+  const legacyPayload = await legacyPayloadPromise;
+  const { chunks } = generateArchive(legacyPayload, outputDir, r2Rows);
+  console.log(`Generated ${chunks.length} stats archive chunks in ${path.relative(process.cwd(), outputDir)}`);
 }
 
-function generateArchive(payload, outputDir, additionalRows = []) {
-  const rows = mergeRows(
-    extractRows(payload).map(compactRow).filter((row) => row !== null),
-    additionalRows.map(compactRow).filter((row) => row !== null),
-  );
-
-  if (rows.length === 0) {
-    throw new Error("No usable stats rows found.");
-  }
-
-  const latest = new Date(rows[0][0] * 1000);
-  const latestYear = latest.getUTCFullYear();
-  const latestMonth = latest.getUTCMonth() + 1;
-  const initialName = previousMonthName(latestYear, latestMonth);
-  const chunks = buildChunks(rows, latestYear, latestMonth);
-  const initialChunk = findChunk(chunks, initialName) || buildMonthChunk(rows, initialName);
-  const archiveFiles = mergeChunks(chunks, initialChunk);
+function generateArchive(legacyPayload, outputDir, r2InputRows = []) {
+  const legacyRows = normalizeLegacyRows(extractRows(legacyPayload))
+    .filter((row) => row[0] < CUTOVER_EPOCH);
+  const r2Rows = normalizeR2Rows(r2InputRows)
+    .filter((row) => row[0] >= CUTOVER_EPOCH);
+  const archiveThroughPeriod = r2Rows.length > 0
+    ? previousMonthName(monthNameForTimestamp(Math.max(...r2Rows.map((row) => row[0]))))
+    : previousMonthName(monthNameForTimestamp(CUTOVER_EPOCH));
+  const rows = mergeRows(legacyRows, r2Rows)
+    .filter((row) => monthNameForTimestamp(row[0]) <= archiveThroughPeriod);
+  const chunkGroups = buildChunks(rows, archiveThroughPeriod);
 
   fs.mkdirSync(outputDir, { recursive: true });
+  const chunks = chunkGroups.map(({ period, granularity, rows: chunkRows }) => {
+    const body = serializeJson({ schemaVersion: 2, period, data: chunkRows });
+    const token = crypto.createHash("sha256").update(body).digest().subarray(0, 6).toString("base64url");
+    const file = `${period}.${token}.json`;
+    fs.writeFileSync(path.join(outputDir, file), body);
+    return {
+      period,
+      granularity,
+      file,
+      minTimestamp: chunkRows[0][0],
+      maxTimestamp: chunkRows.at(-1)[0],
+      rowCount: chunkRows.length,
+    };
+  });
 
-  const manifestBackfill = chunks
-    .filter((chunk) => chunk.name !== initialName)
-    .map(toManifestChunk);
-  const manifestInitial = toManifestChunk(initialChunk);
   const manifest = {
-    output: {
+    schemaVersion: 2,
+    dataset: DATASET,
+    archiveThroughPeriod,
+    format: {
       rowShape: ["epochSeconds", "usercount"],
-      order: "newest-first",
+      timestampUnit: "seconds",
+      order: "ascending",
     },
-    initial: manifestInitial,
-    backfill: manifestBackfill,
+    chunks,
   };
-
-  for (const chunk of archiveFiles) {
-    writeJson(path.join(outputDir, `${chunk.name}.json`), {
-      period: chunk.name,
-      data: chunk.rows,
-    });
-  }
-
-  writeJson(path.join(outputDir, "manifests.json"), manifest);
-  writeBundledManifest(outputDir, manifest);
-
-  return { manifest, chunks: archiveFiles };
+  const manifestBytes = serializeJson(manifest);
+  fs.writeFileSync(path.join(outputDir, "manifests.json"), manifestBytes);
+  removeUnreferencedJson(outputDir, new Set(["manifests.json", ...chunks.map((chunk) => chunk.file)]));
+  writeBundledManifest(outputDir, manifestBytes);
+  return { manifest, chunks };
 }
 
-function writeBundledManifest(outputDir, manifest) {
-  const defaultOutputDir = path.resolve(process.cwd(), DEFAULT_OUTPUT_DIR);
-  if (path.resolve(outputDir) !== defaultOutputDir) return;
-
-  writeJson(path.resolve(process.cwd(), DEFAULT_BUNDLED_MANIFEST_PATH), manifest);
-}
-
-function parseArgs(args) {
-  const options = {};
-
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
-
-    if (arg === "--source") {
-      options.source = args[++index];
-    } else if (arg === "--output") {
-      options.output = args[++index];
-    } else if (arg === "--jsonl-dir") {
-      options.jsonlDir = args[++index];
-    } else if (arg === "--help" || arg === "-h") {
-      printHelp();
-      process.exit(0);
-    } else {
-      throw new Error(`Unknown argument: ${arg}`);
+function normalizeLegacyRows(rows) {
+  const normalized = rows.map((row, index) => {
+    if (!row || Array.isArray(row) || typeof row !== "object") {
+      throw new Error(`Invalid legacy row ${index + 1}: expected an object.`);
     }
-  }
-
-  return options;
-}
-
-function printHelp() {
-  console.log(`Usage: node scripts/generate_stats_archive.cjs [options]
-
-Options:
-  --source <url-or-file>   Stats JSON source. Defaults to GOOGLE_API_URL or .dev.vars.
-  --output <directory>     Output directory. Defaults to ${DEFAULT_OUTPUT_DIR}.
-  --jsonl-dir <directory>  Daily R2 JSONL files to merge with existing archives.
-`);
-}
-
-function readDevVar(name) {
-  const devVarsPath = path.join(process.cwd(), ".dev.vars");
-  if (!fs.existsSync(devVarsPath)) return "";
-
-  const text = fs.readFileSync(devVarsPath, "utf8");
-  const match = text.match(new RegExp(`^${escapeRegExp(name)}=(.*)$`, "m"));
-  if (!match) return "";
-
-  return match[1].trim().replace(/^['"]|['"]$/g, "");
-}
-
-async function readJson(source) {
-  if (/^https?:\/\//i.test(source)) {
-    const response = await fetch(source, {
-      headers: {
-        accept: "application/json",
-        "user-agent": "mushmom-stats-archive-generator/1.0",
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error(`Stats source returned ${response.status}.`);
+    const timestamp = row.timestamp ?? row.time ?? row.created_at ?? row.date;
+    const usercount = row.usercount ?? row.users ?? row.players ?? row.count;
+    const epoch = parseTimestamp(timestamp);
+    if (!isNonnegativeInteger(epoch) || !isNonnegativeInteger(usercount)) {
+      throw new Error(`Invalid legacy row ${index + 1}: expected a timestamp and non-negative integer usercount.`);
     }
+    return [epoch, usercount];
+  });
+  return dedupeLast(normalized);
+}
 
-    return response.json();
+function normalizeR2Rows(rows) {
+  if (!Array.isArray(rows)) throw new Error("R2 input must be an array of tuples.");
+  const normalized = rows.map((row, index) => {
+    if (!Array.isArray(row) || row.length !== 2
+      || !isNonnegativeInteger(row[0]) || !isNonnegativeInteger(row[1])) {
+      throw new Error(`Invalid R2 row ${index + 1}: expected a non-negative integer tuple.`);
+    }
+    return [row[0], row[1]];
+  });
+  return dedupeLast(normalized);
+}
+
+function dedupeLast(rows) {
+  const byTimestamp = new Map();
+  for (const row of rows) byTimestamp.set(row[0], row);
+  return [...byTimestamp.values()].sort((a, b) => a[0] - b[0]);
+}
+
+function mergeRows(...sources) {
+  const byTimestamp = new Map();
+  for (const source of sources) for (const row of source) byTimestamp.set(row[0], row);
+  return [...byTimestamp.values()].sort((a, b) => a[0] - b[0]);
+}
+
+function buildChunks(rows, archiveThroughPeriod) {
+  const horizon = parseMonthKey(archiveThroughPeriod);
+  if (!horizon) throw new Error(`Invalid archive horizon: ${archiveThroughPeriod}`);
+  const rollingStart = new Date(Date.UTC(horizon.year, horizon.month - 12, 1));
+  const monthlyStartYear = rollingStart.getUTCFullYear();
+  const groups = new Map();
+
+  for (const row of rows) {
+    const period = monthNameForTimestamp(row[0]);
+    if (period > archiveThroughPeriod) continue;
+    const year = Number(period.slice(0, 4));
+    const key = year < monthlyStartYear ? String(year) : period;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(row);
   }
 
-  return JSON.parse(fs.readFileSync(path.resolve(process.cwd(), source), "utf8"));
+  return [...groups.entries()]
+    .map(([period, chunkRows]) => ({
+      period,
+      granularity: period.length === 4 ? "year" : "month",
+      rows: chunkRows.sort((a, b) => a[0] - b[0]),
+    }))
+    .sort((a, b) => b.period.localeCompare(a.period));
+}
+
+function readJsonlDirectory(jsonlDir) {
+  if (!fs.existsSync(jsonlDir) || !fs.statSync(jsonlDir).isDirectory()) {
+    throw new Error(`JSONL directory not found: ${jsonlDir}`);
+  }
+  const files = fs.readdirSync(jsonlDir).filter((file) => file.endsWith(".jsonl")).sort();
+  if (files.length === 0) return [];
+  return files.flatMap((file) => parseJsonlFile(path.join(jsonlDir, file), file));
+}
+
+function parseJsonlFile(filePath, fileName = path.basename(filePath)) {
+  const match = /^(\d{4}-\d{2}-\d{2})\.jsonl$/.exec(fileName);
+  if (!match || !isUtcDateKey(match[1])) throw new Error(`Invalid R2 JSONL filename: ${fileName}`);
+  const text = fs.readFileSync(filePath, "utf8");
+  const lines = text.split(/\r?\n/);
+  if (lines.at(-1) === "") lines.pop();
+  let previous = -1;
+  return lines.map((line, index) => {
+    let row;
+    try {
+      row = JSON.parse(line);
+    } catch {
+      throw new Error(`Invalid JSONL in ${filePath} at line ${index + 1}: malformed JSON.`);
+    }
+    if (!Array.isArray(row) || row.length !== 2
+      || !isNonnegativeInteger(row[0]) || !isNonnegativeInteger(row[1])) {
+      throw new Error(`Invalid JSONL in ${filePath} at line ${index + 1}: expected a non-negative integer tuple.`);
+    }
+    if (dateKeyForTimestamp(row[0]) !== match[1]) {
+      throw new Error(`Invalid JSONL in ${filePath} at line ${index + 1}: timestamp does not match filename date.`);
+    }
+    if (row[0] < previous) {
+      throw new Error(`Invalid JSONL in ${filePath} at line ${index + 1}: timestamps must be ascending.`);
+    }
+    previous = row[0];
+    return row;
+  });
 }
 
 function extractRows(payload) {
@@ -149,183 +175,102 @@ function extractRows(payload) {
   if (Array.isArray(payload?.data)) return payload.data;
   if (Array.isArray(payload?.values)) return payload.values;
   if (Array.isArray(payload?.rows)) return payload.rows;
-
-  return [];
-}
-
-function compactRow(row) {
-  const timestamp = Array.isArray(row) ? row[0] : row?.timestamp;
-  const usercount = Number(Array.isArray(row) ? row[1] : row?.usercount);
-  const date = truncateDateToSecond(parseTimestamp(timestamp));
-
-  if (!date || !Number.isInteger(usercount) || usercount < 0) return null;
-
-  return [Math.floor(date.getTime() / 1000), usercount];
-}
-
-function mergeRows(...groups) {
-  const rowsByTimestamp = new Map();
-
-  for (const row of groups.flat()) {
-    rowsByTimestamp.set(row[0], row);
-  }
-
-  return [...rowsByTimestamp.values()].sort((a, b) => b[0] - a[0]);
-}
-
-function readExistingArchiveRows(outputDir) {
-  const manifestPath = path.join(outputDir, "manifests.json");
-  if (!fs.existsSync(manifestPath)) {
-    throw new Error(`Existing archive manifest not found: ${manifestPath}`);
-  }
-
-  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-  const files = new Set([
-    manifest?.initial?.file,
-    ...(Array.isArray(manifest?.backfill) ? manifest.backfill.map((chunk) => chunk?.file) : []),
-  ].filter(Boolean));
-
-  if (files.size === 0) {
-    throw new Error(`Existing archive manifest contained no files: ${manifestPath}`);
-  }
-
-  return [...files].flatMap((file) => {
-    const archivePath = path.join(outputDir, file);
-    if (!fs.existsSync(archivePath)) {
-      throw new Error(`Existing archive file not found: ${archivePath}`);
-    }
-    return extractRows(JSON.parse(fs.readFileSync(archivePath, "utf8")));
-  });
-}
-
-function readJsonlDirectory(jsonlDir) {
-  if (!fs.existsSync(jsonlDir) || !fs.statSync(jsonlDir).isDirectory()) {
-    throw new Error(`JSONL directory not found: ${jsonlDir}`);
-  }
-
-  const files = fs.readdirSync(jsonlDir)
-    .filter((file) => file.endsWith(".jsonl"))
-    .sort();
-  if (files.length === 0) {
-    throw new Error(`JSONL directory contained no .jsonl files: ${jsonlDir}`);
-  }
-
-  return files.flatMap((file) => parseJsonlFile(path.join(jsonlDir, file)));
-}
-
-function parseJsonlFile(filePath) {
-  const text = fs.readFileSync(filePath, "utf8").trim();
-  if (!text) return [];
-
-  return text.split(/\r?\n/).map((line, index) => {
-    let row;
-    try {
-      row = JSON.parse(line);
-    } catch {
-      throw new Error(`Invalid JSONL in ${filePath} at line ${index + 1}: malformed JSON.`);
-    }
-
-    if (!Array.isArray(row)
-      || row.length !== 2
-      || !Number.isInteger(row[0])
-      || row[0] < 0
-      || !Number.isInteger(row[1])
-      || row[1] < 0) {
-      throw new Error(`Invalid JSONL in ${filePath} at line ${index + 1}: expected a non-negative integer tuple.`);
-    }
-    return row;
-  });
+  throw new Error("Legacy source contained no row array.");
 }
 
 function parseTimestamp(value) {
   if (typeof value === "number" && Number.isFinite(value)) {
-    const date = new Date(value > 1e12 ? value : value * 1000);
-    return Number.isNaN(date.getTime()) ? null : date;
+    const milliseconds = value > 1e12 ? value : value * 1000;
+    const date = new Date(milliseconds);
+    return Number.isNaN(date.getTime()) ? null : Math.floor(date.getTime() / 1000);
   }
-  if (typeof value === "string" && /^\d+$/.test(value.trim())) {
-    return parseTimestamp(Number(value));
+  if (typeof value === "string" && /^\d+$/.test(value.trim())) return parseTimestamp(Number(value));
+  if (typeof value !== "string" || !value.trim()) return null;
+  const date = new Date(value.trim().replace(" ", "T").replace(/([+-]\d{2})$/, "$1:00"));
+  return Number.isNaN(date.getTime()) ? null : Math.floor(date.getTime() / 1000);
+}
+
+function monthNameForTimestamp(timestamp) {
+  const dateKey = dateKeyForTimestamp(timestamp);
+  if (!dateKey) throw new Error(`Invalid epoch-second timestamp: ${timestamp}`);
+  return dateKey.slice(0, 7);
+}
+
+function dateKeyForTimestamp(timestamp) {
+  if (!isNonnegativeInteger(timestamp)) return null;
+  const date = new Date(timestamp * 1000);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString().slice(0, 10);
+}
+
+function isNonnegativeInteger(value) {
+  return Number.isSafeInteger(value) && value >= 0;
+}
+
+function previousMonthName(monthKey) {
+  const parsed = parseMonthKey(monthKey);
+  if (!parsed) throw new Error(`Invalid month key: ${monthKey}`);
+  const date = new Date(Date.UTC(parsed.year, parsed.month - 2, 1));
+  return date.toISOString().slice(0, 7);
+}
+
+function parseMonthKey(value) {
+  const match = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(value);
+  return match ? { year: Number(match[1]), month: Number(match[2]) } : null;
+}
+
+function isUtcDateKey(value) {
+  const date = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
+function removeUnreferencedJson(outputDir, keep) {
+  for (const file of fs.readdirSync(outputDir)) {
+    if (file.endsWith(".json") && !keep.has(file)) fs.rmSync(path.join(outputDir, file));
   }
-  if (!value) return null;
-
-  const normalized = String(value)
-    .trim()
-    .replace(" ", "T")
-    .replace(/([+-]\d{2})$/, "$1:00");
-  const date = new Date(normalized);
-
-  return Number.isNaN(date.getTime()) ? null : date;
 }
 
-function truncateDateToSecond(date) {
-  return date ? new Date(Math.floor(date.getTime() / 1000) * 1000) : null;
+function writeBundledManifest(outputDir, bytes) {
+  if (path.resolve(outputDir) !== path.resolve(process.cwd(), DEFAULT_OUTPUT_DIR)) return;
+  fs.mkdirSync(path.dirname(path.resolve(DEFAULT_BUNDLED_MANIFEST_PATH)), { recursive: true });
+  fs.writeFileSync(path.resolve(DEFAULT_BUNDLED_MANIFEST_PATH), bytes);
 }
 
-function buildChunks(rows, latestYear, latestMonth) {
-  const groups = new Map();
+function serializeJson(value) { return `${JSON.stringify(value)}\n`; }
 
-  for (const row of rows) {
-    const date = new Date(row[0] * 1000);
-    const year = date.getUTCFullYear();
-    const month = date.getUTCMonth() + 1;
-    const key =
-      year < latestYear
-        ? String(year)
-        : year === latestYear && month < latestMonth
-          ? `${year}-${String(month).padStart(2, "0")}`
-          : null;
-
-    if (!key) continue;
-
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(row);
+function parseArgs(args) {
+  const options = {};
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--output" || arg === "--jsonl-dir") {
+      const value = args[++index];
+      if (!value) throw new Error(`Missing value for ${arg}.`);
+      options[arg === "--output" ? "output" : "jsonlDir"] = value;
+    } else if (arg === "--help" || arg === "-h") {
+      printHelp();
+      process.exit(0);
+    } else {
+      throw new Error(`Unknown argument: ${arg}`);
+    }
   }
-
-  return [...groups.entries()]
-    .sort(([a], [b]) => b.localeCompare(a))
-    .map(([name, chunkRows]) => ({ name, rows: chunkRows }));
+  return options;
 }
 
-function previousMonthName(latestYear, latestMonth) {
-  const date = new Date(Date.UTC(latestYear, latestMonth - 2, 1));
-  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+function printHelp() {
+  console.log(`Usage: node scripts/generate_stats_archive.cjs [--jsonl-dir <directory>] [--output <directory>]
+
+Always reads legacy history from ${LEGACY_SOURCE}.
+If R2 JSONL is absent, archives through the month before the fixed cutover.`);
 }
 
-function buildMonthChunk(rows, name) {
-  const chunkRows = rows.filter((row) => monthNameForRow(row) === name);
-  return { name, rows: chunkRows };
-}
-
-function monthNameForRow(row) {
-  const date = new Date(row[0] * 1000);
-  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
-}
-
-function findChunk(chunks, name) {
-  return chunks.find((chunk) => chunk.name === name) || null;
-}
-
-function mergeChunks(chunks, chunk) {
-  if (findChunk(chunks, chunk.name)) return chunks;
-
-  return [...chunks, chunk].sort((a, b) => b.name.localeCompare(a.name));
-}
-
-function toManifestChunk({ name, rows }) {
-  return {
-    file: `${name}.json`,
-    period: name,
-    start: rows.at(-1)?.[0] ?? null,
-    end: rows[0]?.[0] ?? null,
-    rows: rows.length,
-  };
-}
-
-function writeJson(filePath, value) {
-  fs.writeFileSync(filePath, `${JSON.stringify(value)}\n`);
-}
-
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+async function readJson(source) {
+  const response = await fetch(source, {
+    headers: {
+      accept: "application/json",
+      "user-agent": "mushmom-stats-archive-generator/2.0",
+    },
+  });
+  if (!response.ok) throw new Error(`Legacy stats source returned ${response.status}.`);
+  return response.json();
 }
 
 if (require.main === module) {
@@ -336,9 +281,11 @@ if (require.main === module) {
 }
 
 module.exports = {
+  CUTOVER_EPOCH,
+  LEGACY_SOURCE,
   buildChunks,
   generateArchive,
-  previousMonthName,
-  readExistingArchiveRows,
+  normalizeLegacyRows,
+  parseJsonlFile,
   readJsonlDirectory,
 };

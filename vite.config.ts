@@ -6,10 +6,9 @@ import { nextMonthKey } from "./src/stats-months";
 const wranglerPort = process.env.WRANGLER_PORT || "8788";
 
 type StatsManifest = {
-  initial?: {
-    file?: string | null;
-    period?: string | null;
-  };
+  schemaVersion?: number;
+  archiveThroughPeriod?: string;
+  chunks?: Array<{ file?: string }>;
 };
 
 const STATS_ARCHIVE_BASE_URL = "/assets/stats/";
@@ -76,15 +75,14 @@ function injectStartupHtml(html: string): string {
   return html.replace(moduleScriptPattern, `${startupTags}\n    <script type="module" src="/src/main.ts"></script>`);
 }
 
-function buildApiPreloadTags(): HtmlTagDescriptor[] {
-  const manifest = readStatsManifest();
-  const firstRecentMonth = nextMonthKey(manifest.initial?.period || "");
-  const initialFile = manifest.initial?.file;
-  if (!initialFile) {
-    throw new Error("Stats manifest is missing a valid initial.file value.");
+function buildApiPreloadTags(manifest: StatsManifest = readStatsManifest()): HtmlTagDescriptor[] {
+  if (manifest.schemaVersion !== 2 || !manifest.archiveThroughPeriod || !Array.isArray(manifest.chunks)) {
+    throw new Error("Stats manifest must use schemaVersion 2.");
   }
+  const firstRecentMonth = nextMonthKey(manifest.archiveThroughPeriod);
+  const newestFile = manifest.chunks[0]?.file;
 
-  return [
+  const tags: HtmlTagDescriptor[] = [
     {
       tag: "link",
       attrs: {
@@ -95,17 +93,18 @@ function buildApiPreloadTags(): HtmlTagDescriptor[] {
       },
       injectTo: "head",
     },
-    {
+  ];
+  if (newestFile) tags.push({
       tag: "link",
       attrs: {
         rel: "preload",
-        href: new URL(initialFile, `https://mushmom.local${STATS_ARCHIVE_BASE_URL}`).pathname,
+        href: new URL(newestFile, `https://mushmom.local${STATS_ARCHIVE_BASE_URL}`).pathname,
         as: "fetch",
         crossorigin: "",
       },
       injectTo: "head",
-    },
-    {
+    });
+  tags.push({
       tag: "link",
       attrs: {
         rel: "preload",
@@ -114,8 +113,8 @@ function buildApiPreloadTags(): HtmlTagDescriptor[] {
         crossorigin: "",
       },
       injectTo: "head",
-    },
-  ];
+    });
+  return tags;
 }
 
 export default defineConfig({

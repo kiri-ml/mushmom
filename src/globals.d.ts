@@ -23,9 +23,9 @@ interface MushmomI18nApi {
   readonly localeRegistry: LocaleConfig[];
   readonly localeLabels: Record<string, string>;
 }
-interface StatsManifestChunk { file: string; period?: string; start?: number | string; end?: number | string; rows?: number; }
-interface StatsManifestOutput { rowShape?: string[]; order?: string; }
-interface StatsManifest { output?: StatsManifestOutput; initial?: StatsManifestChunk; backfill?: StatsManifestChunk[]; }
+interface StatsManifestChunk { period: string; granularity: "month" | "year"; file: string; minTimestamp: number; maxTimestamp: number; rowCount: number; }
+interface StatsManifestFormat { rowShape: ["epochSeconds", "usercount"]; timestampUnit: "seconds"; order: "ascending"; }
+interface StatsManifest { schemaVersion: 2; dataset: "maplelegends-online-users"; archiveThroughPeriod: string; format: StatsManifestFormat; chunks: StatsManifestChunk[]; }
 type RawPayloadRow = [unknown, unknown] | { timestamp?: unknown; time?: unknown; created_at?: unknown; date?: unknown; usercount?: unknown; users?: unknown; players?: unknown; count?: unknown; };
 type StatsPayload = RawPayloadRow[] | { data?: RawPayloadRow[]; values?: RawPayloadRow[]; source?: string; sourceUrl?: string | null; };
 interface InitialStatsHistoryResult<TPoint> { points: TPoint[]; recentPayload: StatsPayload; manifest: StatsManifest; }

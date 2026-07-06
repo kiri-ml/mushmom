@@ -11,6 +11,9 @@ The app fetches:
 
 It visualizes the time series with Apache ECharts.
 
+The deterministic archive format is documented in
+[`docs/archive-schema-v2.md`](docs/archive-schema-v2.md).
+
 ## Data Shape
 
 The dashboard accepts a long list of points. Each point can be an object:

@@ -169,7 +169,7 @@ function isKnownBadPoint(point: StatsPoint): boolean {
 function normalizePayload(payload: StatsPayload): StatsPoint[] {
   const rows: RawPayloadRow[] = Array.isArray(payload) ? payload : Array.isArray(payload.data) ? payload.data : Array.isArray(payload.values) ? payload.values : [];
 
-  return rows
+  const normalized = rows
     .map((row): { timestamp: unknown; usercount: unknown } => {
       if (Array.isArray(row)) {
         return { timestamp: row[0], usercount: row[1] };
@@ -185,6 +185,9 @@ function normalizePayload(payload: StatsPayload): StatsPoint[] {
     .filter((point) => !isKnownBadPoint(point))
     .map((point): StatsPoint => ({ date: truncateDateToSecond(point.date) as Date, count: point.count }))
     .sort((a, b) => a.date.getTime() - b.date.getTime());
+  const byTimestamp = new Map<number, StatsPoint>();
+  normalized.forEach((point) => byTimestamp.set(point.date.getTime(), point));
+  return [...byTimestamp.values()].sort((a, b) => a.date.getTime() - b.date.getTime());
 }
 
 function truncateDateToSecond(date: Date | null): Date | null {
@@ -591,7 +594,7 @@ async function fetchHistoricalStats(): Promise<void> {
   const initial = await loader.loadInitialStatsHistory<StatsPoint>({
     normalizePayload,
     onInitial: ({ points, recentPayload }) => {
-      allPoints = points;
+      allPoints = mergePoints([], points);
       historicalSource = { name: (recentPayload as HistoricalSourcePayload).source || "R2", url: (recentPayload as HistoricalSourcePayload).sourceUrl || null };
       updateHistoricalMetrics(allPoints, historicalSource.name, historicalSource.url);
       render();

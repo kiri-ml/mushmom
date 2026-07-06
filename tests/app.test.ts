@@ -36,8 +36,9 @@ const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json
 const devScript = fs.readFileSync(path.join(repoRoot, "scripts/dev.cjs"), "utf8");
 const viteConfigSource = fs.readFileSync(path.join(repoRoot, "vite.config.ts"), "utf8");
 const statsManifest = JSON.parse(fs.readFileSync(path.join(repoRoot, "public/assets/stats/manifests.json"), "utf8")) as {
-  initial: { end: number; file: string };
-  backfill?: Array<{ end: number | string; file: string }>;
+  schemaVersion: 2;
+  archiveThroughPeriod: string;
+  chunks: StatsManifestChunk[];
 };
 const wranglerToml = fs.readFileSync(path.join(repoRoot, "wrangler.toml"), "utf8");
 
@@ -105,24 +106,24 @@ function buildTranslator(currentLang: string) {
 }
 
 function buildStatsLoader() {
+  const manifest = makeManifest([]);
   return {
     async loadStatsHistory() {},
     async loadInitialStatsHistory(options: LoadInitialStatsHistoryOptions<StatsPoint>) {
       const recentPayload = [[1776945603, 1459] as [number, number]];
-      const manifest = { initial: { file: "", end: 1775000707 }, backfill: [] };
       const result = { points: options.normalizePayload(recentPayload), recentPayload, manifest };
       options.onInitial?.(result);
       return result;
     },
     async loadArchiveStatsHistory(options: LoadArchiveStatsHistoryOptions<StatsPoint>) {
-      const result = { points: [] as StatsPoint[], chunks: options.manifest.backfill || [] };
+      const result = { points: [] as StatsPoint[], chunks: options.manifest.chunks.slice(1) };
       options.onArchive?.(result);
       return result;
     },
-    selectArchiveChunks(manifest: { backfill?: Array<{ end: number; file: string }> }, recentPayload: Array<[number, number] | { timestamp: number }>) {
+    selectArchiveChunks(manifest: StatsManifest, recentPayload: Array<[number, number] | { timestamp: number }>) {
       const rows = Array.isArray(recentPayload) ? recentPayload : [];
       const oldestLatest = Math.min(...rows.map((row) => Number(Array.isArray(row) ? row[0] : row.timestamp)));
-      return (manifest?.backfill || []).filter((chunk) => Number(chunk.end) < oldestLatest);
+      return manifest.chunks.slice(1).filter((chunk) => chunk.maxTimestamp < oldestLatest);
     },
     oldestPayloadTimestamp(payload: { data?: Array<[number, number] | { timestamp: number }> }) {
       const rows = Array.isArray(payload?.data) ? payload.data : [];
@@ -180,15 +181,25 @@ async function loadStatsModule() {
   return { module: await import("../src/load") as StatsModule, globals };
 }
 
-type ArchiveManifest = {
-  initial?: { file: string; period: string; rows: number; start: number | null; end: number | null };
-  backfill: Array<{ file: string; period: string; rows: number }>;
-};
+type ArchiveManifest = StatsManifest;
 type StatsArchiveGenerator = {
-  generateArchive: (payload: unknown, outputDir: string, additionalRows?: Array<[number, number]>) => { manifest: ArchiveManifest };
-  readExistingArchiveRows: (outputDir: string) => Array<[number, number]>;
+  generateArchive: (payload: unknown, outputDir: string, r2Rows?: Array<[number, number]>) => { manifest: ArchiveManifest };
   readJsonlDirectory: (jsonlDir: string) => Array<[number, number]>;
 };
+
+function makeChunk(period: string, minTimestamp: number, maxTimestamp = minTimestamp): StatsManifestChunk {
+  return { period, granularity: period.length === 4 ? "year" : "month", file: `${period}.AAAAAAAA.json`, minTimestamp, maxTimestamp, rowCount: 1 };
+}
+
+function makeManifest(chunks: StatsManifestChunk[], archiveThroughPeriod = "2026-06"): StatsManifest {
+  return {
+    schemaVersion: 2,
+    dataset: "maplelegends-online-users",
+    archiveThroughPeriod,
+    format: { rowShape: ["epochSeconds", "usercount"], timestampUnit: "seconds", order: "ascending" },
+    chunks,
+  };
+}
 
 function useWindow(globals: GlobalOverrides): void {
   globalThis.window = globals.window as Window & typeof globalThis;
@@ -203,7 +214,7 @@ function generateStatsArchive(rows: Array<{ timestamp: string; usercount: number
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mushmom-stats-archive-"));
   const outputDir = path.join(tempDir, "out");
   const generator = require(path.join(repoRoot, "scripts/generate_stats_archive.cjs")) as StatsArchiveGenerator;
-  generator.generateArchive({ data: rows }, outputDir);
+  generator.generateArchive({ data: rows }, outputDir, [[1782864000, 1]]);
 
   const manifest = JSON.parse(fs.readFileSync(path.join(outputDir, "manifests.json"), "utf8")) as ArchiveManifest;
   return { outputDir, manifest };
@@ -259,7 +270,7 @@ describe("vite migration", () => {
         tag: "link",
         attrs: {
           rel: "preload",
-          href: `/assets/stats/${statsManifest.initial.file}`,
+          href: `/assets/stats/${statsManifest.chunks[0]?.file}`,
           as: "fetch",
           crossorigin: "",
         },
@@ -278,11 +289,18 @@ describe("vite migration", () => {
     ]);
   });
 
+  it("omits the archive preload when the v2 manifest has no chunks", () => {
+    expect(buildApiPreloadTags(makeManifest([])).map((tag) => tag.attrs?.href)).toEqual([
+      "/api/stats/2026-07",
+      "/api/current",
+    ]);
+  });
+
   it("injects API preloads before the ECharts loader and module startup", () => {
     const script = buildEchartsLoaderScript();
     const transformed = injectStartupHtml(indexHtml);
     const recentPreload = '<link rel="preload" href="/api/stats/2026-07" as="fetch" crossorigin>';
-    const initialPreload = `<link rel="preload" href="/assets/stats/${statsManifest.initial.file}" as="fetch" crossorigin>`;
+    const initialPreload = `<link rel="preload" href="/assets/stats/${statsManifest.chunks[0]?.file}" as="fetch" crossorigin>`;
     const currentPreload = '<link rel="preload" href="/api/current" as="fetch" crossorigin>';
     expect(script).toContain(GLOBAL_ECHARTS_CDN);
     expect(script).toContain(CHINA_ECHARTS_CDN);
@@ -297,85 +315,72 @@ describe("vite migration", () => {
 });
 
 describe("stats archive generator", () => {
-  it("generates and indexes the previous December when latest stats are in January", () => {
-    const { outputDir, manifest } = generateStatsArchive([
-      { timestamp: "2026-01-02T00:00:00Z", usercount: 1300 },
-      { timestamp: "2025-12-31T23:00:00Z", usercount: 1200 },
-      { timestamp: "2025-06-01T00:00:00Z", usercount: 1100 },
-    ]);
-
-    expect(fs.existsSync(path.join(outputDir, "2025.json"))).toBe(true);
-    expect(fs.existsSync(path.join(outputDir, "2025-12.json"))).toBe(true);
-    expect(manifest.initial).toMatchObject({ file: "2025-12.json", period: "2025-12", rows: 1 });
-    expect(manifest.backfill.map((chunk) => chunk.file)).toContain("2025.json");
-    expect(manifest.backfill.map((chunk) => chunk.file)).not.toContain("2025-12.json");
-  });
-
-  it("reuses the normal monthly chunk when latest stats are after January", () => {
-    const { outputDir, manifest } = generateStatsArchive([
-      { timestamp: "2026-02-02T00:00:00Z", usercount: 1400 },
-      { timestamp: "2026-01-31T23:00:00Z", usercount: 1300 },
-      { timestamp: "2025-12-31T23:00:00Z", usercount: 1200 },
-    ]);
-
-    expect(fs.existsSync(path.join(outputDir, "2026-01.json"))).toBe(true);
-    expect(manifest.initial).toMatchObject({ file: "2026-01.json", period: "2026-01", rows: 1 });
-    expect(manifest.backfill.filter((chunk) => chunk.file === "2026-01.json")).toHaveLength(0);
-  });
-
-  it("orders manifest backfill from newest to oldest", () => {
-    const { manifest } = generateStatsArchive([
-      { timestamp: "2026-04-02T00:00:00Z", usercount: 1400 },
-      { timestamp: "2026-03-31T23:00:00Z", usercount: 1300 },
-      { timestamp: "2026-02-28T23:00:00Z", usercount: 1200 },
-      { timestamp: "2026-01-31T23:00:00Z", usercount: 1100 },
-      { timestamp: "2025-12-31T23:00:00Z", usercount: 1000 },
-    ]);
-
-    expect(manifest.initial?.file).toBe("2026-03.json");
-    expect(manifest.backfill.map((chunk) => chunk.file)).toEqual([
-      "2026-02.json",
-      "2026-01.json",
-      "2025.json",
-    ]);
-  });
-
-  it("merges R2 JSONL rows with existing archive rows and deduplicates timestamps", () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mushmom-r2-jsonl-"));
+  it("generates deterministic legacy-only archives when R2 JSONL is absent", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mushmom-legacy-only-"));
     const jsonlDir = path.join(tempDir, "jsonl");
     const outputDir = path.join(tempDir, "out");
     fs.mkdirSync(jsonlDir);
-    fs.writeFileSync(path.join(jsonlDir, "2026-07-31.jsonl"), "[1785456000,1200]\n");
-    fs.writeFileSync(path.join(jsonlDir, "2026-08-01.jsonl"), "[1785542400,1300]\n[1785542700,1400]\n");
-
     const generator = require(path.join(repoRoot, "scripts/generate_stats_archive.cjs")) as StatsArchiveGenerator;
-    const jsonlRows = generator.readJsonlDirectory(jsonlDir);
-    generator.generateArchive({ data: [[1785456000, 999], [1782863104, 1100]] }, outputDir, jsonlRows);
 
-    const july = JSON.parse(fs.readFileSync(path.join(outputDir, "2026-07.json"), "utf8")) as { data: Array<[number, number]> };
-    expect(july.data).toEqual([[1785456000, 1200]]);
+    expect(generator.readJsonlDirectory(jsonlDir)).toEqual([]);
+    const { manifest } = generator.generateArchive({ data: [
+      { timestamp: "2026-07-01T00:00:00Z", usercount: 99 },
+      { timestamp: "2026-06-30T23:45:04Z", usercount: 12 },
+    ] }, outputDir);
+
+    expect(manifest.archiveThroughPeriod).toBe("2026-06");
+    expect(manifest.chunks.map((chunk) => chunk.period)).toEqual(["2026-06"]);
   });
 
-  it("uses committed archive files as the pre-R2 history", () => {
-    const { outputDir } = generateStatsArchive([
-      { timestamp: "2026-07-02T00:00:00Z", usercount: 1300 },
-      { timestamp: "2026-06-30T23:45:04Z", usercount: 1200 },
-      { timestamp: "2025-12-31T23:45:04Z", usercount: 1100 },
+  it("enforces cutover ownership, excludes the open month, and resolves duplicates last", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mushmom-v2-"));
+    const generator = require(path.join(repoRoot, "scripts/generate_stats_archive.cjs")) as StatsArchiveGenerator;
+    const result = generator.generateArchive({ data: [
+      { timestamp: 1782864000, usercount: 999 },
+      { timestamp: 1782863104, usercount: 10 },
+      { timestamp: 1782863104, usercount: 11 },
+      { timestamp: "2025-01-01T00:00:00Z", usercount: 5 },
+    ] }, tempDir, [[1782863104, 888], [1782864000, 20], [1782864000, 21]]);
+
+    expect(result.manifest.archiveThroughPeriod).toBe("2026-06");
+    const june = result.manifest.chunks.find((chunk) => chunk.period === "2026-06")!;
+    const payload = JSON.parse(fs.readFileSync(path.join(tempDir, june.file), "utf8"));
+    expect(payload.data).toEqual([[1782863104, 11]]);
+    expect(result.manifest.chunks.some((chunk) => chunk.period === "2026-07")).toBe(false);
+  });
+
+  it("emits deterministic hashed bytes, monthly/annual partitions, and removes stale JSON", () => {
+    const { outputDir, manifest } = generateStatsArchive([
+      { timestamp: "2026-06-30T23:45:04Z", usercount: 12 },
+      { timestamp: "2025-01-01T00:00:00Z", usercount: 8 },
+      { timestamp: "2024-12-31T00:00:00Z", usercount: 7 },
     ]);
+    fs.writeFileSync(path.join(outputDir, "stale-v1.json"), "{}\n");
     const generator = require(path.join(repoRoot, "scripts/generate_stats_archive.cjs")) as StatsArchiveGenerator;
-
-    expect(generator.readExistingArchiveRows(outputDir)).toEqual(expect.arrayContaining([
-      [1782863104, 1200],
-      [1767224704, 1100],
-    ]));
+    generator.generateArchive({ data: [
+      { timestamp: "2026-06-30T23:45:04Z", usercount: 12 },
+      { timestamp: "2025-01-01T00:00:00Z", usercount: 8 },
+      { timestamp: "2024-12-31T00:00:00Z", usercount: 7 },
+    ] }, outputDir, [[1782864000, 1]]);
+    const first = fs.readFileSync(path.join(outputDir, "manifests.json"));
+    generator.generateArchive({ data: [
+      { timestamp: "2026-06-30T23:45:04Z", usercount: 12 },
+      { timestamp: "2025-01-01T00:00:00Z", usercount: 8 },
+      { timestamp: "2024-12-31T00:00:00Z", usercount: 7 },
+    ] }, outputDir, [[1782864000, 1]]);
+    expect(fs.readFileSync(path.join(outputDir, "manifests.json"))).toEqual(first);
+    expect(fs.existsSync(path.join(outputDir, "stale-v1.json"))).toBe(false);
+    expect(manifest.chunks.map((chunk) => [chunk.period, chunk.granularity])).toEqual([
+      ["2026-06", "month"], ["2025-01", "month"], ["2024", "year"],
+    ]);
+    expect(manifest.chunks.every((chunk) => /^\d{4}(?:-\d{2})?\.[A-Za-z0-9_-]{8}\.json$/.test(chunk.file))).toBe(true);
   });
 
-  it("fails clearly on invalid R2 JSONL", () => {
+  it("validates daily filenames, date agreement, and ascending rows", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mushmom-invalid-jsonl-"));
-    fs.writeFileSync(path.join(tempDir, "2026-07-03.jsonl"), "[1783036800,-1]\n");
+    fs.writeFileSync(path.join(tempDir, "2026-07-03.jsonl"), "[1783037100,1]\n[1783036800,2]\n");
     const generator = require(path.join(repoRoot, "scripts/generate_stats_archive.cjs")) as StatsArchiveGenerator;
-
-    expect(() => generator.readJsonlDirectory(tempDir)).toThrow("expected a non-negative integer tuple");
+    expect(() => generator.readJsonlDirectory(tempDir)).toThrow("timestamps must be ascending");
   });
 });
 
@@ -524,10 +529,10 @@ describe("app behavior", () => {
     const renderedOptions: unknown[] = [];
     const recentPayload = [[1777594504, 1700] as [number, number], [1775001608, 1317] as [number, number]];
     const archivePayload = { data: [[1767224706, 1200] as [number, number]] };
-    const manifest = {
-      initial: { file: "", end: 1775000707 },
-        backfill: [{ file: "2025.json", period: "2025", end: 1767224706 }],
-    };
+    const manifest = makeManifest([
+      makeChunk("2026-06", 1782863104),
+      makeChunk("2025", 1767224706),
+    ]);
     const translate = buildTranslator("en-US");
     const loader = {
       async loadStatsHistory() {},
@@ -539,7 +544,7 @@ describe("app behavior", () => {
       },
       async loadArchiveStatsHistory(options: LoadArchiveStatsHistoryOptions<StatsPoint>) {
         calls.push("archive");
-        const result = { points: options.normalizePayload(archivePayload), chunks: manifest.backfill };
+        const result = { points: options.normalizePayload(archivePayload), chunks: manifest.chunks.slice(1) };
         options.onArchive?.(result);
         return result;
       },
@@ -587,233 +592,66 @@ describe("app behavior", () => {
   });
 });
 
-describe("stats loader", () => {
-  it("loads initial stats without fetching archive chunks", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-05T00:00:00Z"));
-    const { module } = await loadStatsModule();
-    const fetcher = vi.fn(async (url: string) => {
-      if (url === "/api/stats/2026-07") {
-        return [[1782864000, 1700], [1782864300, 1317]];
-      }
-      throw new Error(`unexpected fetch: ${url}`);
-    });
-    const onInitial = vi.fn();
+describe("stats loader schema v2", () => {
+  const normalize = (payload: StatsPayload) => Array.isArray(payload)
+    ? payload
+    : Array.isArray(payload.data) ? payload.data : [];
 
-    const result = await module.loadInitialStatsHistory({
-      manifest: {
-        initial: { file: "", period: "2026-06", end: 1782863104 },
-        backfill: [{ file: "2025.json", end: 1767224706 }],
-      },
-      fetcher,
-      normalizePayload: (payload) => Array.isArray(payload) ? payload : Array.isArray(payload.data) ? payload.data : [],
-      onInitial,
-    });
-
-    expect(fetcher).toHaveBeenCalledTimes(1);
-    expect(fetcher).toHaveBeenCalledWith("/api/stats/2026-07");
-    expect(result.points).toHaveLength(2);
-    expect(onInitial).toHaveBeenCalledWith(result);
-  });
-
-  it("loads manifest initial with the initial stats payload", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-05T00:00:00Z"));
-    const { module } = await loadStatsModule();
-    const fetcher = vi.fn(async (url: string) => {
-      if (url === "/api/stats/2026-07") {
-        return [[1782864000, 1700], [1782864300, 1317]];
-      }
-      if (url === "/assets/stats/2026-06.json") {
-        return { data: [[1782863104, 1300]] };
-      }
-      throw new Error(`unexpected fetch: ${url}`);
-    });
-    const onInitial = vi.fn();
-
-    const result = await module.loadInitialStatsHistory({
-      manifest: {
-        initial: { file: "2026-06.json", period: "2026-06", end: 1782863104 },
-        backfill: [{ file: "2025.json", end: 1767224706 }],
-      },
-      fetcher,
-      normalizePayload: (payload) => Array.isArray(payload) ? payload : Array.isArray(payload.data) ? payload.data : [],
-      onInitial,
-    });
-
-    expect(fetcher).toHaveBeenCalledWith("/api/stats/2026-07");
-    expect(fetcher).toHaveBeenCalledWith("/assets/stats/2026-06.json");
-    expect(result.points).toEqual([[1782863104, 1300], [1782864000, 1700], [1782864300, 1317]]);
-    expect(onInitial).toHaveBeenCalledWith(result);
-  });
-
-  it("loads archive chunks separately from the initial payload", async () => {
-    const { module } = await loadStatsModule();
-    const fetcher = vi.fn(async (url: string) => {
-      if (url === "/assets/stats/2025.json") {
-        return { data: [[1767224706, 1200]] };
-      }
-      throw new Error(`unexpected fetch: ${url}`);
-    });
-    const onArchive = vi.fn();
-
-    const result = await module.loadArchiveStatsHistory({
-      manifest: {
-        initial: { file: "", end: 1775000707 },
-        backfill: [
-          { file: "2025.json", end: 1767224706 },
-          { file: "2026-04.json", end: 1777592707 },
-        ],
-      },
-      recentPayload: [[1777594504, 1700], [1775001608, 1317]],
-      fetcher,
-      normalizePayload: (payload) => Array.isArray(payload) ? payload : Array.isArray(payload.data) ? payload.data : [],
-      onArchive,
-    });
-
-    expect(fetcher).toHaveBeenCalledTimes(1);
-    expect(fetcher).toHaveBeenCalledWith("/assets/stats/2025.json");
-    expect(result.points).toEqual([[1767224706, 1200]]);
-    expect(result.chunks.map((chunk: { file: string }) => chunk.file)).toEqual(["2025.json"]);
-    expect(onArchive).toHaveBeenCalledWith(result);
-  });
-
-  it("uses the bundled manifest without fetching manifests.json", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-05T00:00:00Z"));
-    const { module } = await loadStatsModule();
-    const oldestRecent = Number(statsManifest.initial.end) + 1;
-    const recentPayload = [[oldestRecent, 1317], [oldestRecent + 3600, 1700]];
-    const expectedArchiveChunks = (statsManifest.backfill ?? []).filter((chunk) => Number(chunk.end) < oldestRecent);
-    const fetcher = vi.fn(async (url: string) => {
-      if (url === "/api/stats/2026-07") {
-        return recentPayload;
-      }
-      if (url.startsWith("/assets/stats/")) {
-        return { data: [] };
-      }
-      throw new Error(`unexpected fetch: ${url}`);
-    });
-    const onInitial = vi.fn();
-    const onArchive = vi.fn();
-
-    await module.loadStatsHistory({
-      fetcher,
-      normalizePayload: (payload) => Array.isArray(payload) ? payload : Array.isArray(payload.data) ? payload.data : [],
-      onInitial,
-      onArchive,
-    });
-
-    expect(fetcher).toHaveBeenCalledWith("/api/stats/2026-07");
-    expect(fetcher).not.toHaveBeenCalledWith("/assets/stats/manifests.json");
-    expect(onInitial).toHaveBeenCalledTimes(1);
-    expect(onInitial.mock.calls[0]?.[0]?.manifest?.backfill?.length).toBeGreaterThan(0);
-    expect(onArchive).toHaveBeenCalledTimes(1);
-    const archiveCall = onArchive.mock.calls[0]?.[0];
-    const selectedChunks = archiveCall?.chunks ?? [];
-    expect(selectedChunks.map((chunk: { file: string }) => chunk.file)).toEqual(expectedArchiveChunks.map((chunk) => chunk.file));
-    expect(selectedChunks.every((chunk: { end?: number | string }) => Number(chunk.end) < oldestRecent)).toBe(true);
-  });
-
-  it("skips archive chunks overlapping recent payload", async () => {
-    const { module } = await loadStatsModule();
-    const chunks = module.selectArchiveChunks(
-      { backfill: [{ file: "2025.json", end: 1767224700 }, { file: "2026-03.json", end: 1775000707 }, { file: "2026-04.json", end: 1777592707 }] },
-      [[1777594504, 1700], [1775001608, 1317]],
-    );
-    expect(chunks.map((chunk) => chunk.file)).toEqual(["2025.json", "2026-03.json"]);
-  });
-
-  it("does not select the separate initial manifest entry for archive loading", async () => {
-    const { module } = await loadStatsModule();
-    const chunks = module.selectArchiveChunks(
-      {
-        initial: { file: "2026-03.json", end: 1775000707 },
-        backfill: [{ file: "2025.json", end: 1767224700 }],
-      },
-      [[1777594504, 1700], [1775001608, 1317]],
-    );
-    expect(chunks.map((chunk) => chunk.file)).toEqual(["2025.json"]);
-  });
-
-  it("fetches every month after the manifest period through the current UTC month", async () => {
+  it("loads all recent API months and the newest chunk at startup", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-05T00:00:00Z"));
     const { module } = await loadStatsModule();
+    const newest = makeChunk("2026-06", 1782863104);
     const fetcher = vi.fn(async (url: string) => {
-      if (url === "/custom/stats/2026-07") {
-        return [[1782864000, 1700]];
-      }
-      if (url === "/custom/stats/2026-08") {
-        return [[1785542400, 1800]];
-      }
+      if (url === "/api/stats/2026-07") return [[1782864000, 20]];
+      if (url === "/api/stats/2026-08") return [[1785542400, 30]];
+      if (url === `/assets/stats/${newest.file}`) return { schemaVersion: 2, period: newest.period, data: [[1782863104, 10]] };
       throw new Error(`unexpected fetch: ${url}`);
     });
-
-    await module.loadStatsHistory({
-      statsApiBaseUrl: "/custom/stats",
-      manifest: { initial: { file: "", period: "2026-06", end: 1782863104 }, backfill: [] },
-      fetcher,
-      normalizePayload: (payload) => Array.isArray(payload) ? payload : Array.isArray(payload.data) ? payload.data : [],
-    });
-
-    expect(fetcher).toHaveBeenCalledWith("/custom/stats/2026-07");
-    expect(fetcher).toHaveBeenCalledWith("/custom/stats/2026-08");
+    const result = await module.loadInitialStatsHistory({ manifest: makeManifest([newest]), fetcher, normalizePayload: normalize });
+    expect(result.points).toEqual([[1782863104, 10], [1782864000, 20], [1785542400, 30]]);
   });
 
-  it("uses the initial archive when recent monthly responses are empty", async () => {
+  it("loads only remaining non-overlapping chunks in manifest order", async () => {
+    const { module } = await loadStatsModule();
+    const newest = makeChunk("2026-06", 1782863104);
+    const overlap = makeChunk("2026-05", 1777593612, 1780271104);
+    const older = makeChunk("2024", 1704067200);
+    const fetcher = vi.fn(async (url: string) => {
+      if (url === `/assets/stats/${older.file}`) return { schemaVersion: 2, period: older.period, data: [[1704067200, 1]] };
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    const result = await module.loadArchiveStatsHistory({
+      manifest: makeManifest([newest, overlap, older]),
+      recentPayload: [[1778000000, 9]],
+      fetcher,
+      normalizePayload: normalize,
+    });
+    expect(result.chunks).toEqual([older]);
+    expect(result.points).toEqual([[1704067200, 1]]);
+  });
+
+  it("supports an empty archive and rejects v1 manifests and chunks", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-05T00:00:00Z"));
     const { module } = await loadStatsModule();
-    const fetcher = vi.fn(async (url: string) => {
-      if (url === "/api/stats/2026-07") return [];
-      if (url === "/assets/stats/2026-06.json") return { data: [[1782863104, 1300]] };
-      throw new Error(`unexpected fetch: ${url}`);
+    const empty = await module.loadInitialStatsHistory({
+      manifest: makeManifest([]),
+      fetcher: async () => [[1782864000, 20]],
+      normalizePayload: normalize,
     });
-
-    const result = await module.loadInitialStatsHistory({
-      manifest: {
-        initial: { file: "2026-06.json", period: "2026-06", end: 1782863104 },
-        backfill: [],
-      },
-      fetcher,
-      normalizePayload: (payload) => Array.isArray(payload) ? payload : Array.isArray(payload.data) ? payload.data : [],
-    });
-
-    expect(result.points).toEqual([[1782863104, 1300]]);
-    expect(result.recentPayload).toEqual([]);
-  });
-
-  it("rejects invalid monthly response shapes and completely empty history", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-05T00:00:00Z"));
-    const { module } = await loadStatsModule();
-    const manifest = { initial: { file: "", period: "2026-06", end: 1782863104 }, backfill: [] };
-    const normalizePayload = (payload: StatsPayload) => Array.isArray(payload) ? payload : Array.isArray(payload.data) ? payload.data : [];
-
+    expect(empty.points).toEqual([[1782864000, 20]]);
     await expect(module.loadInitialStatsHistory({
-      manifest,
-      fetcher: async () => ({ data: [] }),
-      normalizePayload,
-    })).rejects.toThrow("Monthly stats response for 2026-07 was not an array.");
-
-    await expect(module.loadInitialStatsHistory({
-      manifest,
+      manifest: { initial: {}, backfill: [] } as never,
       fetcher: async () => [],
-      normalizePayload,
-    })).rejects.toThrow("Stats history contained no usable points.");
-  });
+      normalizePayload: normalize,
+    })).rejects.toThrow("schemaVersion 2");
 
-  it("throws when bundled manifest is missing a valid initial.period", async () => {
-    const { module } = await loadStatsModule();
-    const fetcher = vi.fn(async () => [[1777594504, 1700]]);
-
-    await expect(module.loadStatsHistory({
-      manifest: { backfill: [] },
-      fetcher,
-      normalizePayload: (payload) => Array.isArray(payload) ? payload : Array.isArray(payload.data) ? payload.data : [],
-    })).rejects.toThrow("Bundled stats manifest is missing a valid initial.period value.");
-
-    expect(fetcher).not.toHaveBeenCalled();
+    const newest = makeChunk("2026-06", 1782863104);
+    await expect(module.loadInitialStatsHistory({
+      manifest: makeManifest([newest]),
+      fetcher: async (url: string) => url.startsWith("/api/") ? [] : { period: newest.period, data: [[1782863104, 10]] },
+      normalizePayload: normalize,
+    })).rejects.toThrow("schemaVersion 2");
   });
 });
