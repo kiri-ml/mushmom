@@ -12,11 +12,6 @@ type R2ObjectBodyLike = {
 };
 
 type R2BucketLike = {
-  list(options: { prefix: string; cursor?: string }): Promise<{
-    objects: Array<{ key: string }>;
-    truncated: boolean;
-    cursor?: string;
-  }>;
   get(key: string): Promise<R2ObjectBodyLike | null>;
 };
 
@@ -77,27 +72,9 @@ export async function onRequestGet(context: PagesContext): Promise<Response> {
 }
 
 async function fetchMonthlyRows(bucket: R2BucketLike, month: string): Promise<StatsRow[]> {
-  const prefix = `${R2_JSONL_PREFIX}${month}-`;
-  const dailyKeyPattern = new RegExp(`^${prefix}\\d{2}\\.jsonl$`);
-  const objects: Array<{ key: string }> = [];
-  let cursor: string | undefined;
-
-  do {
-    const listed = await bucket.list({
-      prefix,
-      ...(cursor ? { cursor } : {}),
-    });
-    objects.push(...listed.objects.filter(({ key }) => dailyKeyPattern.test(key)));
-    cursor = listed.truncated ? listed.cursor : undefined;
-  } while (cursor);
-
-  const files = await Promise.all(objects.map(async ({ key }) => {
-    const body = await bucket.get(key);
-    if (!body) throw new Error(`R2 object disappeared while reading: ${key}`);
-    return parseR2Jsonl(await body.text(), key);
-  }));
-
-  return files.flat();
+  const key = `${R2_JSONL_PREFIX}${month}.jsonl`;
+  const body = await bucket.get(key);
+  return body ? parseR2Jsonl(await body.text(), key) : [];
 }
 
 function parseR2Jsonl(text: string, key: string): StatsRow[] {

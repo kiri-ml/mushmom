@@ -376,11 +376,15 @@ describe("stats archive generator", () => {
     expect(manifest.chunks.every((chunk) => /^\d{4}(?:-\d{2})?\.[A-Za-z0-9_-]{8}\.json$/.test(chunk.file))).toBe(true);
   });
 
-  it("validates daily filenames, date agreement, and ascending rows", () => {
+  it("validates monthly filenames, month agreement, and ascending rows", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mushmom-invalid-jsonl-"));
-    fs.writeFileSync(path.join(tempDir, "2026-07-03.jsonl"), "[1783037100,1]\n[1783036800,2]\n");
+    const jsonlPath = path.join(tempDir, "2026-07.jsonl");
+    fs.writeFileSync(jsonlPath, "[1783037100,1]\n[1783036800,2]\n");
     const generator = require(path.join(repoRoot, "scripts/generate_stats_archive.cjs")) as StatsArchiveGenerator;
     expect(() => generator.readJsonlDirectory(tempDir)).toThrow("timestamps must be ascending");
+
+    fs.writeFileSync(jsonlPath, "[1785542400,1]\n");
+    expect(() => generator.readJsonlDirectory(tempDir)).toThrow("timestamp does not match filename month");
   });
 });
 

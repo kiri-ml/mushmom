@@ -142,8 +142,8 @@ function readJsonlDirectory(jsonlDir) {
 }
 
 function parseJsonlFile(filePath, fileName = path.basename(filePath)) {
-  const match = /^(\d{4}-\d{2}-\d{2})\.jsonl$/.exec(fileName);
-  if (!match || !isUtcDateKey(match[1])) throw new Error(`Invalid R2 JSONL filename: ${fileName}`);
+  const match = /^(\d{4}-\d{2})\.jsonl$/.exec(fileName);
+  if (!match || !parseMonthKey(match[1])) throw new Error(`Invalid R2 JSONL filename: ${fileName}`);
   const text = fs.readFileSync(filePath, "utf8");
   const lines = text.split(/\r?\n/);
   if (lines.at(-1) === "") lines.pop();
@@ -159,8 +159,8 @@ function parseJsonlFile(filePath, fileName = path.basename(filePath)) {
       || !isNonnegativeInteger(row[0]) || !isNonnegativeInteger(row[1])) {
       throw new Error(`Invalid JSONL in ${filePath} at line ${index + 1}: expected a non-negative integer tuple.`);
     }
-    if (dateKeyForTimestamp(row[0]) !== match[1]) {
-      throw new Error(`Invalid JSONL in ${filePath} at line ${index + 1}: timestamp does not match filename date.`);
+    if (monthNameForTimestamp(row[0]) !== match[1]) {
+      throw new Error(`Invalid JSONL in ${filePath} at line ${index + 1}: timestamp does not match filename month.`);
     }
     if (row[0] < previous) {
       throw new Error(`Invalid JSONL in ${filePath} at line ${index + 1}: timestamps must be ascending.`);
@@ -216,11 +216,6 @@ function previousMonthName(monthKey) {
 function parseMonthKey(value) {
   const match = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(value);
   return match ? { year: Number(match[1]), month: Number(match[2]) } : null;
-}
-
-function isUtcDateKey(value) {
-  const date = new Date(`${value}T00:00:00Z`);
-  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
 }
 
 function removeUnreferencedJson(outputDir, keep) {

@@ -6,11 +6,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.join(__dirname, "..");
 
 type R2BucketStub = {
-  list: (options: { prefix: string; cursor?: string }) => Promise<{
-    objects: Array<{ key: string }>;
-    truncated: boolean;
-    cursor?: string;
-  }>;
   get: (key: string) => Promise<{ text: () => Promise<string> } | null>;
 };
 
@@ -37,12 +32,6 @@ async function loadMonthlyModule(): Promise<MonthlyModule> {
 
 function makeR2Bucket(objects: Record<string, string> = {}): R2BucketStub {
   return {
-    async list() {
-      return {
-        objects: Object.keys(objects).map((key) => ({ key })),
-        truncated: false,
-      };
-    },
     async get(key) {
       const value = objects[key];
       return value === undefined ? null : { async text() { return value; } };
@@ -90,25 +79,13 @@ describe("monthly stats function", () => {
     },
   );
 
-  it("concatenates date-ordered daily JSONL without sorting or deduplicating rows", async () => {
+  it("reads the requested monthly JSONL object directly", async () => {
     const mod = await loadMonthlyModule();
     const cache = stubCache();
-    const list = vi.fn(async () => ({
-      objects: [
-        { key: "stats/jsonl/2026-07-01.jsonl" },
-        { key: "stats/jsonl/2026-07-02.jsonl" },
-        { key: "stats/jsonl/2026-07-notes.txt" },
-      ],
-      truncated: false,
-    }));
-    const values: Record<string, string> = {
-      "stats/jsonl/2026-07-01.jsonl": "[1782864000,1200]\n[1782864300,1250]\n",
-      "stats/jsonl/2026-07-02.jsonl": "[1782864300,1250]\n[1782950700,1300]\n",
-    };
-    const bucket: R2BucketStub = {
-      list,
-      async get(key) { return { async text() { return values[key]; } }; },
-    };
+    const bucket = makeR2Bucket({
+      "stats/jsonl/2026-07.jsonl": "[1782864000,1200]\n[1782864300,1250]\n",
+    });
+    const get = vi.spyOn(bucket, "get");
 
     const response = await mod.onRequestGet(makeContext("2026-07", bucket));
 
@@ -116,36 +93,9 @@ describe("monthly stats function", () => {
     await expect(response.json()).resolves.toEqual([
       [1782864000, 1200],
       [1782864300, 1250],
-      [1782864300, 1250],
-      [1782950700, 1300],
     ]);
-    expect(list).toHaveBeenCalledWith({ prefix: "stats/jsonl/2026-07-" });
+    expect(get).toHaveBeenCalledWith("stats/jsonl/2026-07.jsonl");
     expect(cache.put).toHaveBeenCalledOnce();
-  });
-
-  it("preserves listing order across R2 pagination", async () => {
-    const mod = await loadMonthlyModule();
-    stubCache();
-    const list = vi.fn(async (options: { prefix: string; cursor?: string }) => options.cursor
-      ? { objects: [{ key: "stats/jsonl/2026-07-02.jsonl" }], truncated: false }
-      : { objects: [{ key: "stats/jsonl/2026-07-01.jsonl" }], truncated: true, cursor: "page-2" });
-    const values: Record<string, string> = {
-      "stats/jsonl/2026-07-01.jsonl": "[1782864000,1200]\n",
-      "stats/jsonl/2026-07-02.jsonl": "[1782950400,1300]\n",
-    };
-    const bucket: R2BucketStub = {
-      list,
-      async get(key) { return { async text() { return values[key]; } }; },
-    };
-
-    const response = await mod.onRequestGet(makeContext("2026-07", bucket));
-
-    await expect(response.json()).resolves.toEqual([
-      [1782864000, 1200],
-      [1782950400, 1300],
-    ]);
-    expect(list).toHaveBeenNthCalledWith(1, { prefix: "stats/jsonl/2026-07-" });
-    expect(list).toHaveBeenNthCalledWith(2, { prefix: "stats/jsonl/2026-07-", cursor: "page-2" });
   });
 
   it("returns an empty successful response for a future month", async () => {
@@ -173,7 +123,7 @@ describe("monthly stats function", () => {
     const cached = new Response("[[1,2]]", { headers: { "content-type": "application/json" } });
     const cache = stubCache(cached);
     const bucket = makeR2Bucket();
-    const list = vi.spyOn(bucket, "list");
+    const get = vi.spyOn(bucket, "get");
 
     const response = await mod.onRequestGet(makeContext(
       "2026-07",
@@ -183,18 +133,15 @@ describe("monthly stats function", () => {
 
     expect(await response.json()).toEqual([[1, 2]]);
     expect((cache.match.mock.calls[0]?.[0] as Request).url).toBe("https://mushmom.test/api/stats/2026-07");
-    expect(list).not.toHaveBeenCalled();
+    expect(get).not.toHaveBeenCalled();
     expect(cache.put).not.toHaveBeenCalled();
   });
 
-  it("returns an uncached 502 when a listed object disappears", async () => {
+  it("returns an uncached 502 when R2 fails", async () => {
     const mod = await loadMonthlyModule();
     stubCache();
     const bucket: R2BucketStub = {
-      async list() {
-        return { objects: [{ key: "stats/jsonl/2026-07-01.jsonl" }], truncated: false };
-      },
-      async get() { return null; },
+      async get() { throw new Error("R2 unavailable"); },
     };
 
     const response = await mod.onRequestGet(makeContext("2026-07", bucket));
@@ -202,7 +149,7 @@ describe("monthly stats function", () => {
     expect(response.status).toBe(502);
     expect(response.headers.get("cache-control")).toBe("no-store");
     await expect(response.json()).resolves.toEqual({
-      error: "R2 object disappeared while reading: stats/jsonl/2026-07-01.jsonl",
+      error: "R2 unavailable",
       data: [],
     });
   });
@@ -213,14 +160,14 @@ describe("monthly stats function", () => {
 
     const malformed = await mod.onRequestGet(makeContext(
       "2026-07",
-      makeR2Bucket({ "stats/jsonl/2026-07-01.jsonl": "not-json\n" }),
+      makeR2Bucket({ "stats/jsonl/2026-07.jsonl": "not-json\n" }),
     ));
     const unconfigured = await mod.onRequestGet(makeContext("2026-07", null));
 
     expect(malformed.status).toBe(502);
     expect(malformed.headers.get("cache-control")).toBe("no-store");
     await expect(malformed.json()).resolves.toEqual({
-      error: "Invalid R2 JSONL in stats/jsonl/2026-07-01.jsonl at line 1: malformed JSON.",
+      error: "Invalid R2 JSONL in stats/jsonl/2026-07.jsonl at line 1: malformed JSON.",
       data: [],
     });
     expect(unconfigured.status).toBe(503);

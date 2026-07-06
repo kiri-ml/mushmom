@@ -112,7 +112,12 @@ Cloudflare Pages should use:
 Monthly R2 stats are available from `GET /api/stats/YYYY-MM`. The month must use
 the zero-padded UTC format, for example `/api/stats/2026-07`. Successful
 responses are JSON arrays of `[epochSeconds, usercount]` rows in ascending
-order. Missing days are omitted and a month with no objects returns `[]`.
+order. Each month is stored as `stats/jsonl/YYYY-MM.jsonl`; a month with no
+object returns `[]`.
+
+The stats Worker upserts each scheduled observation into the current monthly
+object. If the object does not exist, the Worker creates it from that
+observation.
 
 Create the R2 bucket and configure the admin secret:
 

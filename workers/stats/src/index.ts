@@ -51,13 +51,13 @@ export function bucketTimestamp(epochSeconds: number, intervalSeconds: number): 
   return Math.floor(epochSeconds / intervalSeconds) * intervalSeconds;
 }
 
-export function dailyKey(bucket: number): string {
+export function monthlyKey(bucket: number): string {
   if (!Number.isInteger(bucket) || bucket < 0) {
     throw new Error("Bucket timestamp must be a non-negative integer.");
   }
 
   const iso = new Date(bucket * 1000).toISOString();
-  return `stats/jsonl/${iso.slice(0, 10)}.jsonl`;
+  return `stats/jsonl/${iso.slice(0, 7)}.jsonl`;
 }
 
 export function isStatsRow(value: unknown): value is StatsRow {
@@ -167,7 +167,7 @@ export async function syncStats(env: Env, options: SyncOptions = {}): Promise<Sy
   }
   const data: StatsRow = [bucket, validateUsercount(payload)];
 
-  const key = dailyKey(bucket);
+  const key = monthlyKey(bucket);
   let existing: R2ObjectBodyLike | null;
   try {
     existing = await env.STATS_BUCKET.get(key);

@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   bucketTimestamp,
-  dailyKey,
   isStatsRow,
+  monthlyKey,
   parseJsonl,
   serializeJsonl,
   syncStats,
@@ -14,8 +14,10 @@ import {
 class FakeBucket {
   readonly objects = new Map<string, string>();
   readonly puts: Array<{ key: string; value: string }> = [];
+  readonly gets: string[] = [];
 
   async get(key: string): Promise<{ text(): Promise<string> } | null> {
+    this.gets.push(key);
     const value = this.objects.get(key);
     return value === undefined ? null : { async text() { return value; } };
   }
@@ -47,10 +49,10 @@ describe("stats rows", () => {
     expect(bucketTimestamp(1_783_036_979, 300)).toBe(1_783_036_800);
   });
 
-  it("generates UTC daily keys from bucketed timestamps", () => {
-    expect(dailyKey(1_783_036_800)).toBe("stats/jsonl/2026-07-03.jsonl");
-    expect(dailyKey(Date.parse("2026-07-02T23:55:00.000Z") / 1000))
-      .toBe("stats/jsonl/2026-07-02.jsonl");
+  it("generates UTC monthly keys from bucketed timestamps", () => {
+    expect(monthlyKey(1_783_036_800)).toBe("stats/jsonl/2026-07.jsonl");
+    expect(monthlyKey(Date.parse("2026-06-30T23:55:00.000Z") / 1000))
+      .toBe("stats/jsonl/2026-06.jsonl");
   });
 
   it("parses and serializes compact JSONL tuples", () => {
@@ -96,18 +98,19 @@ describe("stats sync validation", () => {
     expect(bucket.puts).toEqual([]);
   });
 
-  it("accepts zero and writes only oldest-first daily JSONL", async () => {
+  it("upserts an existing monthly object", async () => {
     const bucket = new FakeBucket();
-    bucket.objects.set("stats/jsonl/2026-07-03.jsonl", "[1783037100,12]\n[1783036500,8]\n");
+    bucket.objects.set("stats/jsonl/2026-07.jsonl", "[1783037100,12]\n[1783036500,8]\n");
 
     const result = await syncStats(createEnv(bucket), {
       now: new Date("2026-07-03T00:01:00.000Z"),
       fetcher: responseWith({ usercount: 0 }),
     });
 
-    expect(bucket.objects.get("stats/jsonl/2026-07-03.jsonl")).toBe(
+    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe(
       "[1783036500,8]\n[1783036800,0]\n[1783037100,12]\n",
     );
+    expect(bucket.gets).toEqual(["stats/jsonl/2026-07.jsonl"]);
     expect(result).toEqual({
       fetchedAt: "2026-07-03T00:01:00.000Z",
       bucket: 1_783_036_800,
@@ -116,13 +119,25 @@ describe("stats sync validation", () => {
     expect(bucket.puts).toHaveLength(1);
   });
 
+  it("creates a monthly object from the latest observation when none exists", async () => {
+    const bucket = new FakeBucket();
+
+    await syncStats(createEnv(bucket), {
+      now: new Date("2026-07-03T00:01:00.000Z"),
+      fetcher: responseWith({ usercount: 5 }),
+    });
+
+    expect(bucket.gets).toEqual(["stats/jsonl/2026-07.jsonl"]);
+    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe("[1783036800,5]\n");
+  });
+
   it.each([
     "not-json\n",
     "[1783036800,-1]\n",
     "{\"timestamp\":1783036800,\"usercount\":1}\n",
   ])("rejects invalid existing JSONL without writing", async (existing) => {
     const bucket = new FakeBucket();
-    bucket.objects.set("stats/jsonl/2026-07-03.jsonl", existing);
+    bucket.objects.set("stats/jsonl/2026-07.jsonl", existing);
 
     await expect(syncStats(createEnv(bucket), {
       now: new Date("2026-07-03T00:01:00.000Z"),
