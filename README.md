@@ -83,22 +83,11 @@ Create a production build:
 npm run build
 ```
 
-## Cloudflare local/dev notes
-
-For local Google API testing, create `.dev.vars`:
-
-```sh
-GOOGLE_API_URL="https://example.googleapis.com/your-json-endpoint"
-GOOGLE_API_CACHE_TTL="3600"
-```
-
-If `GOOGLE_API_URL` is not set, the stats function can return an unavailable
-state and the frontend will reflect that.
-
 ## Deploy
 
-Set `GOOGLE_API_URL` as a Cloudflare Pages secret or environment variable, then
-build and deploy with Wrangler:
+The Pages Function reads monthly stats from the `STATS_BUCKET` R2 binding
+declared in `wrangler.toml`. No Pages secrets or environment variables are
+required. Build and deploy with Wrangler:
 
 ```sh
 npm run build
