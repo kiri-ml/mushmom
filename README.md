@@ -9,7 +9,7 @@ The app fetches:
 - current online users through `/api/current`
 - bundled translations from `src/i18n/*.json`
 
-It visualizes the time series with Apache ECharts.
+It visualizes the time series with uPlot.
 
 The deterministic archive format is documented in
 [`docs/archive-schema-v2.md`](docs/archive-schema-v2.md).

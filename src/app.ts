@@ -1,8 +1,11 @@
 /// <reference path="./globals.d.ts" />
 
+import uPlot from "uplot";
+
 type ChartRange = "24h" | "7d" | "28d" | "90d" | "180d" | "ytd" | "1y" | "3y" | "all";
 type ChartKind = "timeline" | "heatmap" | "distribution";
 type BucketUnit = "hour" | "day" | "week";
+type TimelineBucket = "raw" | "8h" | "1d" | "1w";
 
 type MetricElementKey = "current" | "peak" | "average" | "lastSample" | "sampleCount" | "rangeLabel" | "sourceLabel";
 
@@ -23,9 +26,6 @@ interface CurrentStatus {
 
 interface TimelineConfig {
   labelKey: string;
-  bucketKey?: string;
-  unit?: BucketUnit;
-  size?: number;
 }
 
 interface DistributionBucket {
@@ -45,8 +45,41 @@ interface BucketAccumulator extends BucketSummary {
   total: number;
 }
 
+interface TimelineScaleSource {
+  xValues: number[];
+  lowValues: number[];
+  highValues: number[];
+}
+
+type HeatmapValue = [hour: number, day: number, score: number | null, count: number, percentiles: Record<string, number>, samples: number];
+
+interface ChartBuild {
+  kind: ChartKind;
+  options: uPlot.Options;
+  data: uPlot.AlignedData;
+  empty: boolean;
+  timelineBuckets?: BucketSummary[];
+  heatmapValues?: HeatmapValue[];
+  distributionBuckets?: DistributionBucket[];
+}
+
+interface ChartInstance {
+  destroy(): void;
+  redraw?(rebuildPaths?: boolean, recalcAxes?: boolean): void;
+  setScale?(key: string, opts: { min: number; max: number }): void;
+  setSize(size: { width: number; height: number }): void;
+}
+
+type ChartFactory = (options: uPlot.Options, data: uPlot.AlignedData, target: HTMLElement) => ChartInstance;
+
+type HeatmapHoverPlot = uPlot & {
+  __mushmomHeatmapHover?: { hour: number; day: number } | null;
+  __mushmomHeatmapColors?: Map<string, string>;
+};
+
 const chartElement = requireElement("#population-chart");
 const rangeButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-range]"));
+const bucketButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-bucket]"));
 const chartButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-chart]"));
 const statusDot = requireElement("#status-dot");
 const statusText = requireElement("#status-text");
@@ -79,11 +112,14 @@ const elements: Record<MetricElementKey, HTMLElement> = {
 
 let allPoints: StatsPoint[] = [];
 let currentRange: ChartRange = "7d";
+let currentTimelineBucket: TimelineBucket = "raw";
 let activeChart: ChartKind = "timeline";
-let chart: EChartsInstance | null = null;
+let chart: ChartInstance | null = null;
+let chartFactory: ChartFactory = (options, data, target) => new uPlot(options, data, target);
 let historicalSource: HistoricalSource = { name: "Unknown", url: null };
 let currentStatus: CurrentStatus = { kind: "loading", key: "status.loading", params: {} };
 let pendingRender = false;
+let resizeListenerAttached = false;
 
 function requireElement(selector: string): HTMLElement {
   const element = document.querySelector<HTMLElement>(selector);
@@ -117,13 +153,36 @@ function toHeatmapScore(v: number | null | undefined): number | null {
   return 100;
 }
 
+function parseHexColor(color: string): [number, number, number] {
+  const value = color.replace("#", "");
+  return [
+    Number.parseInt(value.slice(0, 2), 16),
+    Number.parseInt(value.slice(2, 4), 16),
+    Number.parseInt(value.slice(4, 6), 16),
+  ];
+}
+
+function interpolateHeatmapColor(score: number | null): string {
+  if (score == null || score <= HEATMAP_VISUAL_MIN) return HEATMAP_OUTOFRANGE_COLOR;
+  if (score >= HEATMAP_VISUAL_MAX) return HEATMAP_COLORS[HEATMAP_COLORS.length - 1];
+  const normalized = (score - HEATMAP_VISUAL_MIN) / (HEATMAP_VISUAL_MAX - HEATMAP_VISUAL_MIN);
+  const scaled = normalized * (HEATMAP_COLORS.length - 1);
+  const lowerIndex = Math.floor(scaled);
+  const upperIndex = Math.min(HEATMAP_COLORS.length - 1, lowerIndex + 1);
+  const t = scaled - lowerIndex;
+  const lower = parseHexColor(HEATMAP_COLORS[lowerIndex]);
+  const upper = parseHexColor(HEATMAP_COLORS[upperIndex]);
+  const [r, g, b] = lower.map((channel, index) => Math.round(lerp(channel, upper[index], t)));
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
 function getWindowLike(): Window | undefined {
   return typeof window === "undefined" ? undefined : window;
 }
 
 function whenAppReady(): Promise<unknown[]> {
   const windowLike = getWindowLike();
-  return Promise.all([globalThis.__mushmomEchartsReady || Promise.resolve(), windowLike?.MushmomI18n?.ready || Promise.resolve()]);
+  return Promise.all([windowLike?.MushmomI18n?.ready || Promise.resolve()]);
 }
 
 function getI18n(): MushmomI18nApi | null {
@@ -257,6 +316,20 @@ function refreshStatusText(): void {
   statusText.textContent = tr(currentStatus.key, currentStatus.params);
 }
 
+function lowerBoundPointIndex(points: StatsPoint[], minTime: number): number {
+  let low = 0;
+  let high = points.length;
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2);
+    if (points[mid].date.getTime() < minTime) {
+      low = mid + 1;
+    } else {
+      high = mid;
+    }
+  }
+  return low;
+}
+
 function pointsForRange(points: StatsPoint[], range: ChartRange): StatsPoint[] {
   if (range === "all" || points.length === 0) return points;
   const latest = points[points.length - 1].date.getTime();
@@ -264,7 +337,7 @@ function pointsForRange(points: StatsPoint[], range: ChartRange): StatsPoint[] {
   if (range === "ytd") {
     const latestDate = points[points.length - 1].date;
     const yearStart = new Date(latestDate.getFullYear(), 0, 1).getTime();
-    return points.filter((point) => point.date.getTime() >= yearStart);
+    return points.slice(lowerBoundPointIndex(points, yearStart));
   }
 
   const windows: Record<Exclude<ChartRange, "all" | "ytd">, number> = {
@@ -277,7 +350,7 @@ function pointsForRange(points: StatsPoint[], range: ChartRange): StatsPoint[] {
     "3y": 3 * 365 * DAY_MS,
   };
   const windowMs = windows[range as Exclude<ChartRange, "all" | "ytd">] ?? windows["24h"];
-  return points.filter((point) => latest - point.date.getTime() <= windowMs);
+  return points.slice(lowerBoundPointIndex(points, latest - windowMs));
 }
 
 function setSourceLabel(source: string, sourceUrl: string | null = null): void {
@@ -358,6 +431,124 @@ function buildDistributionBuckets(counts: number[]): DistributionBucket[] {
   return histogramBuckets;
 }
 
+function heatmapSquarePaths(): uPlot.Series.Points.PathBuilder {
+  return (self, seriesIdx, idx0, idx1, filtIdxs) => {
+    const stroke = new Path2D();
+    const clip = new Path2D();
+    const heatmapPlot = self as HeatmapHoverPlot;
+    const hover = heatmapPlot.__mushmomHeatmapHover;
+    const colors = heatmapPlot.__mushmomHeatmapColors || new Map<string, string>();
+    const xValues = self.data[0] as number[];
+    const yValues = self.data[seriesIdx] as Array<number | null | undefined>;
+    const fillByColor = new Map<string, Path2D>();
+    const cellWidth = self.bbox.width / 24;
+    const cellHeight = self.bbox.height / 7;
+    const gap = 2;
+    const width = Math.max(2, cellWidth - gap);
+    const height = Math.max(2, cellHeight - gap);
+    const halfWidth = width / 2;
+    const halfHeight = height / 2;
+
+    clip.rect(self.bbox.left, self.bbox.top, self.bbox.width, self.bbox.height);
+
+    const drawSquare = (index: number) => {
+      const yValue = yValues[index];
+      if (yValue == null) return;
+      const xValue = xValues[index];
+      const centerX = self.valToPos(xValues[index], "x", true);
+      const centerY = self.valToPos(yValue, "y", true);
+      const isHovered = hover?.hour === xValue && hover.day === yValue;
+      const color = colors.get(`${yValue}-${xValue}`) || HEATMAP_OUTOFRANGE_COLOR;
+      const fill = fillByColor.get(color) || new Path2D();
+      fill.rect(centerX - halfWidth, centerY - halfHeight, width, height);
+      fillByColor.set(color, fill);
+      if (isHovered) stroke.rect(centerX - halfWidth, centerY - halfHeight, width, height);
+    };
+
+    if (filtIdxs) {
+      filtIdxs.forEach(drawSquare);
+    } else {
+      for (let index = idx0; index <= idx1; index += 1) drawSquare(index);
+    }
+
+    return { fill: fillByColor, stroke, clip, flags: 3 } as unknown as uPlot.Series.Points.Paths;
+  };
+}
+
+function formatHeatmapTooltip(value: HeatmapValue, weekdayLabels: string[]): string {
+  const [hour, day, , count, percentiles, samples] = value;
+  const rows = [
+    `<strong>${weekdayLabels[day]} ${hour}:00</strong>`,
+    `${tr("chart.tooltip.avg")}: ${formatInteger(count)}`,
+  ];
+  Object.entries(percentiles || {}).forEach(([label, percentileValue]) => {
+    rows.push(`${label}: ${formatInteger(percentileValue)}`);
+  });
+  rows.push(tr("chart.tooltip.samplesCount", { count: formatLocaleNumber(samples) }));
+  return rows.join("<br />");
+}
+
+function heatmapTooltipPlugin(values: HeatmapValue[], weekdayLabels: string[]): uPlot.Plugin {
+  const valuesByCell = new Map(values.map((value) => [`${value[1]}-${value[0]}`, value]));
+  const colorsByCell = new Map(values.map((value) => [`${value[1]}-${value[0]}`, interpolateHeatmapColor(value[2])]));
+  let tooltip: HTMLDivElement | null = null;
+  let hoveredCell: string | null = null;
+
+  const setHoveredCell = (self: HeatmapHoverPlot, hour: number | null, day: number | null) => {
+    const nextCell = hour == null || day == null ? null : `${day}-${hour}`;
+    if (nextCell === hoveredCell) return;
+    hoveredCell = nextCell;
+    self.__mushmomHeatmapHover = hour == null || day == null ? null : { hour, day };
+    self.redraw(true, false);
+  };
+
+  return {
+    hooks: {
+      ready: [
+        (self) => {
+          (self as HeatmapHoverPlot).__mushmomHeatmapColors = colorsByCell;
+          tooltip = document.createElement("div");
+          tooltip.className = "chart-tooltip";
+          tooltip.hidden = true;
+          self.over.append(tooltip);
+        },
+      ],
+      setCursor: [
+        (self) => {
+          if (!tooltip || self.cursor.left == null || self.cursor.top == null) {
+            if (tooltip) tooltip.hidden = true;
+            return;
+          }
+
+          const hour = Math.round(self.posToVal(self.cursor.left, "x"));
+          const day = Math.round(self.posToVal(self.cursor.top, "y"));
+          const value = valuesByCell.get(`${day}-${hour}`);
+          if (!value || hour < 0 || hour > 23 || day < 0 || day > 6) {
+            tooltip.hidden = true;
+            setHoveredCell(self as HeatmapHoverPlot, null, null);
+            return;
+          }
+
+          setHoveredCell(self as HeatmapHoverPlot, hour, day);
+
+          tooltip.innerHTML = formatHeatmapTooltip(value, weekdayLabels);
+          tooltip.hidden = false;
+          const left = Math.min(self.over.clientWidth - tooltip.offsetWidth - 10, self.cursor.left + 14);
+          const top = Math.min(self.over.clientHeight - tooltip.offsetHeight - 10, self.cursor.top + 14);
+          tooltip.style.left = `${Math.max(10, left)}px`;
+          tooltip.style.top = `${Math.max(10, top)}px`;
+        },
+      ],
+      destroy: [
+        () => {
+          tooltip?.remove();
+          tooltip = null;
+        },
+      ],
+    },
+  };
+}
+
 function formatPercentage(value: number): string {
   if (!Number.isFinite(value)) return "--";
   if (value >= 10) return `${value.toFixed(0)}%`;
@@ -367,16 +558,16 @@ function formatPercentage(value: number): string {
 
 const TIMELINE_RANGE_CONFIG: Record<Exclude<ChartRange, "24h" | "ytd">, TimelineConfig> = {
   "7d": { labelKey: "chart.series.players" },
-  "28d": { labelKey: "chart.series.averagePlayersBucket", bucketKey: "bucket.4h", unit: "hour", size: 4 },
-  "90d": { labelKey: "chart.series.averagePlayersBucket", bucketKey: "bucket.12h", unit: "hour", size: 12 },
-  "180d": { labelKey: "chart.series.averagePlayersBucket", bucketKey: "bucket.1d", unit: "day", size: 1 },
-  "1y": { labelKey: "chart.series.averagePlayersBucket", bucketKey: "bucket.48h", unit: "day", size: 2 },
-  "3y": { labelKey: "chart.series.averagePlayersBucket", bucketKey: "bucket.1w", unit: "week", size: 1 },
-  all: { labelKey: "chart.series.averagePlayersBucket", bucketKey: "bucket.1w", unit: "week", size: 1 },
+  "28d": { labelKey: "chart.series.players" },
+  "90d": { labelKey: "chart.series.players" },
+  "180d": { labelKey: "chart.series.players" },
+  "1y": { labelKey: "chart.series.players" },
+  "3y": { labelKey: "chart.series.players" },
+  all: { labelKey: "chart.series.players" },
 };
 
 function getSeriesLabel(config: TimelineConfig): string {
-  return config.bucketKey ? tr(config.labelKey, { bucket: tr(config.bucketKey) }) : tr(config.labelKey);
+  return tr(config.labelKey);
 }
 
 const RANGE_WINDOW_MS: Record<Exclude<ChartRange, "all" | "ytd">, number> = {
@@ -387,6 +578,12 @@ const RANGE_WINDOW_MS: Record<Exclude<ChartRange, "all" | "ytd">, number> = {
   "180d": 180 * DAY_MS,
   "1y": 365 * DAY_MS,
   "3y": 3 * 365 * DAY_MS,
+};
+
+const TIMELINE_BUCKET_CONFIG: Record<Exclude<TimelineBucket, "raw">, { unit: BucketUnit; size: number; labelKey: string }> = {
+  "8h": { unit: "hour", size: 8, labelKey: "bucket.8h" },
+  "1d": { unit: "day", size: 1, labelKey: "bucket.1d" },
+  "1w": { unit: "week", size: 1, labelKey: "bucket.1w" },
 };
 
 function startOfLocalDay(date: Date): number {
@@ -466,66 +663,246 @@ function getTimelineConfig(range: ChartRange, visible: StatsPoint[]): TimelineCo
   return TIMELINE_RANGE_CONFIG["1y"];
 }
 
-function emptyGraphic(text = tr("ui.noLiveData")) {
-  return { type: "text", left: "center", top: "middle", style: { text, fill: "#a9b1ad", font: "700 16px Inter, sans-serif" } };
-}
-
-function baseAxisOption() {
-  return { animationDuration: 450, backgroundColor: "transparent", tooltip: { trigger: "axis", backgroundColor: "#22292a", borderColor: "#35403e", textStyle: { color: "#f4f1e8" }, valueFormatter: (value: number | string) => Number.isFinite(Number(value)) ? formatLocaleNumber(Number(value)) : value } };
-}
-
-function buildTimelineOptions(points: StatsPoint[]) {
-  const visible = pointsForRange(points, currentRange);
-  const config = getTimelineConfig(currentRange, visible);
-  const values = visible.map((point) => [point.date.getTime(), point.count]);
-  const bucketed = config.unit != null && config.size != null;
-  const buckets = bucketed ? buildBucketSummaries(visible, { unit: config.unit as BucketUnit, size: config.size as number }) : [];
-  const averageData = buckets.map((bucket) => [bucket.time, Math.round(bucket.avg)]);
-  const rangeBaseData = buckets.map((bucket) => [bucket.time, bucket.min]);
-  const rangeSpreadData = buckets.map((bucket) => [bucket.time, bucket.max - bucket.min]);
-  const bucketMin = buckets.length > 0 ? Math.min(...buckets.map((bucket) => bucket.min)) : 0;
-  const bucketMax = buckets.length > 0 ? Math.max(...buckets.map((bucket) => bucket.max)) : 0;
-
+function getChartSize(): { width: number; height: number } {
   return {
-    ...baseAxisOption(),
-    tooltip: bucketed ? {
-      trigger: "axis",
-      backgroundColor: "#22292a",
-      borderColor: "#35403e",
-      textStyle: { color: "#f4f1e8" },
-      formatter: (params: Array<{ dataIndex?: number }>) => {
-        const index = params[0]?.dataIndex;
-        if (index == null) return "";
-        const bucket = buckets[index];
-        if (!bucket) return "";
-        return [
-          `<strong>${formatBucketRange(bucket.time, { unit: config.unit as BucketUnit, size: config.size as number })}</strong>`,
-          `${tr("chart.tooltip.avg")}: ${formatInteger(bucket.avg)}`,
-          `${tr("chart.tooltip.peak")}: ${formatInteger(bucket.max)}`,
-          `${tr("chart.tooltip.trough")}: ${formatInteger(bucket.min)}`,
-          tr("chart.tooltip.samplesCount", { count: formatLocaleNumber(bucket.samples) }),
-        ].join("<br />");
-      },
-    } : { trigger: "axis", backgroundColor: "#22292a", borderColor: "#35403e", textStyle: { color: "#f4f1e8" }, valueFormatter: (value: number | string) => Number.isFinite(Number(value)) ? formatLocaleNumber(Number(value)) : value },
-    grid: { left: 52, right: 24, top: 34, bottom: 76 },
-    xAxis: { type: "time", axisLine: { lineStyle: { color: "#35403e" } }, axisLabel: { color: "#a9b1ad", formatter: (value: number) => formatTimelineAxisLabel(value, currentRange) }, splitLine: { show: false } },
-    yAxis: { type: "value", min: bucketed ? Math.max(0, Math.floor(bucketMin * 0.94)) : 0, max: bucketed ? Math.ceil(bucketMax * 1.03) : undefined, axisLabel: { color: "#a9b1ad" }, splitLine: { lineStyle: { color: "rgba(169, 177, 173, 0.14)" } } },
-    dataZoom: [{ type: "inside", throttle: 80 }, { type: "slider", height: 24, bottom: 16, borderColor: "#35403e", fillerColor: "rgba(125, 216, 125, 0.18)", handleStyle: { color: "#7dd87d" }, textStyle: { color: "#a9b1ad" } }],
-    series: bucketed ? [
-      { id: "range-base", type: "line", stack: "population-range", data: rangeBaseData, symbol: "none", lineStyle: { opacity: 0 }, itemStyle: { opacity: 0 }, areaStyle: { opacity: 0 }, silent: true, tooltip: { show: false } },
-      { id: "range-spread", name: tr("chart.series.playerRange"), type: "line", stack: "population-range", data: rangeSpreadData, symbol: "none", lineStyle: { opacity: 0 }, areaStyle: { color: "rgba(125, 216, 125, 0.16)" }, silent: true, tooltip: { show: false } },
-      { id: "bucket-average", name: getSeriesLabel(config), type: "line", smooth: true, showSymbol: buckets.length < 80, symbolSize: 7, lineStyle: { width: 3, color: "#7dd87d" }, itemStyle: { color: "#f1c44f" }, data: averageData, z: 3 },
-    ] : [
-      { name: getSeriesLabel(config), type: "line", smooth: true, showSymbol: visible.length < 80, symbolSize: 7, lineStyle: { width: 3, color: "#7dd87d" }, itemStyle: { color: "#f1c44f" }, areaStyle: { color: { type: "linear", x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: "rgba(125, 216, 125, 0.36)" }, { offset: 1, color: "rgba(125, 216, 125, 0.02)" }] } }, data: values },
-    ],
-    graphic: bucketed ? (buckets.length === 0 ? emptyGraphic() : null) : (values.length === 0 ? emptyGraphic() : null),
+    width: Math.max(320, chartElement.clientWidth || 840),
+    height: Math.max(260, chartElement.clientHeight || 470),
   };
 }
 
-function buildHeatmapOptions(points: StatsPoint[]) {
+function axisStroke(): string {
+  return "#a9b1ad";
+}
+
+function gridStroke(): string {
+  return "rgba(169, 177, 173, 0.14)";
+}
+
+function buildBaseOptions(kind: ChartKind): uPlot.Options {
+  const { width, height } = getChartSize();
+  return {
+    width,
+    height,
+    class: `mushmom-uplot-${kind}`,
+    legend: { show: true, live: true },
+    cursor: { drag: { x: true, y: false } },
+    padding: [18, 18, 10, 8],
+    series: [{}],
+    axes: [
+      { stroke: axisStroke(), grid: { show: false }, ticks: { stroke: "#35403e" } },
+      { stroke: axisStroke(), grid: { stroke: gridStroke() }, ticks: { stroke: "#35403e" } },
+    ],
+  };
+}
+
+function buildEmptyChart(kind: ChartKind): ChartBuild {
+  const options = buildBaseOptions(kind);
+  options.title = tr("ui.noLiveData");
+  options.scales = kind === "timeline" ? { x: { time: true }, y: { range: [0, 1] } } : { x: { time: false }, y: { range: [0, 1] } };
+  options.series = [{}, { label: tr("ui.noLiveData"), stroke: "#7dd87d", width: 0, points: { show: false } }];
+  return { kind, options, data: [[0], [null]], empty: true };
+}
+
+function timelineViewportBounds(points: StatsPoint[], range: ChartRange): { min: number; max: number } | null {
+  if (points.length === 0) return null;
+  const first = points[0].date.getTime();
+  const latestPoint = points[points.length - 1];
+  const latest = latestPoint.date.getTime();
+
+  if (range === "all") return { min: first, max: latest };
+  if (range === "ytd") {
+    return { min: new Date(latestPoint.date.getFullYear(), 0, 1).getTime(), max: latest };
+  }
+
+  const windowMs = RANGE_WINDOW_MS[range as Exclude<ChartRange, "all" | "ytd">] ?? RANGE_WINDOW_MS["7d"];
+  return { min: latest - windowMs, max: latest };
+}
+
+function timelineBucketsForMode(points: StatsPoint[], bucket: TimelineBucket): BucketSummary[] {
+  if (bucket === "raw") return [];
+  const config = TIMELINE_BUCKET_CONFIG[bucket];
+  return buildBucketSummaries(points, config);
+}
+
+function timelineScaleSource(points: StatsPoint[], bucket: TimelineBucket = currentTimelineBucket): TimelineScaleSource {
+  if (bucket === "raw") {
+    const values = points.map((point) => point.count);
+    return {
+      xValues: points.map((point) => point.date.getTime()),
+      lowValues: values,
+      highValues: values,
+    };
+  }
+
+  const buckets = timelineBucketsForMode(points, bucket);
+  return {
+    xValues: buckets.map((item) => item.time),
+    lowValues: buckets.map((item) => item.min),
+    highValues: buckets.map((item) => item.max),
+  };
+}
+
+function timelineYBoundsForViewport(points: StatsPoint[], viewport: { min: number; max: number } | null, bucket: TimelineBucket = currentTimelineBucket): { min: number; max: number } {
+  const source = timelineScaleSource(points, bucket);
+  const indexes = source.xValues
+    .map((value, index) => ({ value, index }))
+    .filter(({ value }) => !viewport || (value >= viewport.min && value <= viewport.max))
+    .map(({ index }) => index);
+  const sourceIndexes = indexes.length > 0 ? indexes : source.xValues.map((_, index) => index);
+  const valueMax = sourceIndexes.length > 0 ? Math.max(...sourceIndexes.map((index) => source.highValues[index])) : 1;
+  return { min: 0, max: Math.max(1, Math.ceil(valueMax * 1.04)) };
+}
+
+function expandedTimelineRange(currentMin: number | null | undefined, currentMax: number | null | undefined, xValues: number[]): { min: number; max: number } | null {
+  if (xValues.length < 2) return null;
+  const totalMin = xValues[0];
+  const totalMax = xValues[xValues.length - 1];
+  const totalSpan = totalMax - totalMin;
+  if (!Number.isFinite(totalMin) || !Number.isFinite(totalMax) || totalSpan <= 0) return null;
+
+  if (!Number.isFinite(currentMin) || !Number.isFinite(currentMax)) {
+    return { min: totalMin, max: totalMax };
+  }
+
+  const minCurrent = currentMin as number;
+  const maxCurrent = currentMax as number;
+  const currentSpan = maxCurrent - minCurrent;
+  if (currentSpan <= 0 || currentSpan >= totalSpan) {
+    return { min: totalMin, max: totalMax };
+  }
+
+  const targetSpan = Math.min(currentSpan * 2, totalSpan);
+  const center = (minCurrent + maxCurrent) / 2;
+  let min = center - targetSpan / 2;
+  let max = center + targetSpan / 2;
+
+  if (min < totalMin) {
+    max = Math.min(totalMax, max + (totalMin - min));
+    min = totalMin;
+  }
+  if (max > totalMax) {
+    min = Math.max(totalMin, min - (max - totalMax));
+    max = totalMax;
+  }
+
+  return { min, max };
+}
+
+function applyTimelineViewport(plot: Pick<uPlot, "setScale">, points: StatsPoint[], viewport: { min: number; max: number } | null, bucket: TimelineBucket = currentTimelineBucket): void {
+  if (!viewport) return;
+  plot.setScale("x", viewport);
+  plot.setScale("y", timelineYBoundsForViewport(points, viewport, bucket));
+}
+
+function handleTimelineDblClick(self: uPlot, points: StatsPoint[], bucket: TimelineBucket): void {
+  const source = timelineScaleSource(points, bucket);
+  const range = expandedTimelineRange(self.scales.x.min, self.scales.x.max, source.xValues);
+  applyTimelineViewport(self, points, range, bucket);
+}
+
+function buildTimelineOptions(points: StatsPoint[]): ChartBuild {
+  const visible = pointsForRange(points, currentRange);
+  const config = getTimelineConfig(currentRange, visible);
+
+  if (points.length === 0) {
+    return buildEmptyChart("timeline");
+  }
+
+  const bucket = currentTimelineBucket;
+  const buckets = timelineBucketsForMode(points, bucket);
+  const bucketConfig = bucket === "raw" ? null : TIMELINE_BUCKET_CONFIG[bucket];
+  const scaleSource = timelineScaleSource(points, bucket);
+  const viewport = timelineViewportBounds(points, currentRange);
+  const yBounds = timelineYBoundsForViewport(points, viewport, bucket);
+  const seriesLabel = bucketConfig ? tr("chart.series.averagePlayersBucket", { bucket: tr(bucketConfig.labelKey) }) : getSeriesLabel(config);
+  const options = buildBaseOptions("timeline");
+  options.cursor = {
+    ...options.cursor,
+    bind: {
+      ...options.cursor?.bind,
+      dblclick: (self) => (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        handleTimelineDblClick(self, points, bucket);
+        return null;
+      },
+    },
+  };
+  options.ms = 1;
+  options.scales = {
+    x: { time: true, ...(viewport || {}) },
+    y: { range: [yBounds.min, yBounds.max] },
+  };
+  options.axes = [
+    {
+      stroke: axisStroke(),
+      grid: { show: false },
+      ticks: { stroke: "#35403e" },
+      values: (_self, splits) => splits.map((value) => String(formatTimelineAxisLabel(value, currentRange))),
+    },
+    {
+      stroke: axisStroke(),
+      grid: { stroke: gridStroke() },
+      ticks: { stroke: "#35403e" },
+      values: (_self, splits) => splits.map((value) => formatInteger(value)),
+    },
+  ];
+
+  if (bucketConfig) {
+    options.series = [
+      {},
+      { label: tr("chart.tooltip.peak"), stroke: "rgba(241, 196, 79, 0.64)", width: 1, points: { show: false } },
+      { label: tr("chart.tooltip.trough"), stroke: "rgba(169, 177, 173, 0.74)", width: 1, points: { show: false } },
+      {
+        label: seriesLabel,
+        stroke: "#7dd87d",
+        width: 3,
+        points: { show: buckets.length < 80, size: 7, fill: "#f1c44f", stroke: "#35403e" },
+      },
+    ];
+    options.bands = [{ series: [1, 2], fill: "rgba(125, 216, 125, 0.24)" }];
+    return {
+      kind: "timeline",
+      options,
+      data: [
+        scaleSource.xValues,
+        buckets.map((item) => item.max),
+        buckets.map((item) => item.min),
+        buckets.map((item) => Math.round(item.avg)),
+      ],
+      empty: false,
+      timelineBuckets: buckets,
+    };
+  }
+
+  const values = points.map((point) => point.count);
+  options.series = [
+    {},
+    {
+      label: seriesLabel,
+      stroke: "#7dd87d",
+      fill: "rgba(125, 216, 125, 0.16)",
+      width: 3,
+      points: { show: visible.length < 80, size: 7, fill: "#f1c44f", stroke: "#35403e" },
+    },
+  ];
+  return {
+    kind: "timeline",
+    options,
+    data: [scaleSource.xValues, values],
+    empty: false,
+  };
+}
+
+function applyCurrentTimelineViewport(): boolean {
+  if (activeChart !== "timeline" || !chart?.setScale || allPoints.length === 0) return false;
+  applyTimelineViewport(chart as unknown as Pick<uPlot, "setScale">, allPoints, timelineViewportBounds(allPoints, currentRange), currentTimelineBucket);
+  return true;
+}
+
+function buildHeatmapOptions(points: StatsPoint[]): ChartBuild {
   const visible = pointsForRange(points, currentRange);
   const weekdayLabels = formatWeekdayLabels();
-  const hourLabels = Array.from({ length: 24 }, (_, hour) => `${hour}:00`);
   const percentileRanks = getHeatmapPercentileRanks(visible);
   const buckets = new Map<string, number[]>();
   visible.forEach((point) => {
@@ -534,49 +911,151 @@ function buildHeatmapOptions(points: StatsPoint[]) {
     bucket.push(point.count);
     buckets.set(key, bucket);
   });
-  const values: Array<[number, number, number | null, number, Record<string, number>, number]> = [];
+  const values: HeatmapValue[] = [];
   buckets.forEach((bucket, key) => {
     const [day, hour] = key.split("-").map(Number);
     const averageCount = Math.round(average(bucket));
     const percentiles = Object.fromEntries(percentileRanks.map((rank) => [`p${rank}`, Math.round(percentile(bucket, rank))]));
     values.push([hour, day, toHeatmapScore(averageCount), averageCount, percentiles, bucket.length]);
   });
-  const { min: visualMin, max: visualMax } = getHeatmapVisualBounds();
-  return { animationDuration: 450, backgroundColor: "transparent", tooltip: { position: "top", backgroundColor: "#22292a", borderColor: "#35403e", textStyle: { color: "#f4f1e8" }, formatter: (params: { value: [number, number, number | null, number, Record<string, number>, number] }) => { const [hour, day, , count, percentiles, samples] = params.value; const rows = [`<strong>${weekdayLabels[day]} ${hourLabels[hour]}</strong>`, `${tr("chart.tooltip.avg")}: ${formatInteger(count)}`]; Object.entries(percentiles || {}).forEach(([label, value]) => { rows.push(`${label}: ${formatInteger(value)}`); }); if (percentiles && Object.keys(percentiles).length > 0) rows.push(tr("chart.tooltip.samplesCount", { count: formatLocaleNumber(samples) })); return rows.join("<br />"); } }, grid: { left: 52, right: 24, top: 34, bottom: 88 }, xAxis: { type: "category", data: hourLabels, axisLine: { lineStyle: { color: "#35403e" } }, axisLabel: { color: "#a9b1ad" }, splitArea: { show: true, areaStyle: { color: ["rgba(255,255,255,0.02)", "transparent"] } } }, yAxis: { type: "category", data: weekdayLabels, inverse: true, axisLine: { lineStyle: { color: "#35403e" } }, axisLabel: { color: "#a9b1ad" }, splitArea: { show: true, areaStyle: { color: ["rgba(255,255,255,0.02)", "transparent"] } } }, visualMap: { min: visualMin, max: visualMax, dimension: 2, calculable: true, orient: "horizontal", left: "center", bottom: 18, textStyle: { color: "#a9b1ad" }, inRange: { color: HEATMAP_COLORS }, outOfRange: { color: [HEATMAP_OUTOFRANGE_COLOR] } }, series: [{ name: tr("chart.series.averagePlayers"), type: "heatmap", data: values, emphasis: { itemStyle: { borderColor: "#f4f1e8", borderWidth: 1 } } }], graphic: values.length === 0 ? emptyGraphic() : null };
+  if (values.length === 0) return buildEmptyChart("heatmap");
+
+  const hasCell = new Set(values.map(([hour, day]) => `${day}-${hour}`));
+  const hours = Array.from({ length: 24 }, (_, hour) => hour);
+  const options = buildBaseOptions("heatmap");
+  options.legend = { show: false };
+  options.cursor = { ...options.cursor, points: { show: false } };
+  options.scales = { x: { time: false, range: [-0.5, 23.5] }, y: { range: [-0.5, 6.5], dir: -1 } };
+  options.plugins = [heatmapTooltipPlugin(values, weekdayLabels)];
+  options.axes = [
+    {
+      stroke: axisStroke(),
+      grid: { stroke: "rgba(255,255,255,0.04)" },
+      ticks: { stroke: "#35403e" },
+      splits: () => hours.filter((hour) => hour % 3 === 0),
+      values: (_self, splits) => splits.map((hour) => `${hour}:00`),
+    },
+    {
+      stroke: axisStroke(),
+      grid: { stroke: gridStroke() },
+      ticks: { stroke: "#35403e" },
+      splits: () => weekdayLabels.map((_, day) => day),
+      values: (_self, splits) => splits.map((day) => weekdayLabels[day] ?? ""),
+    },
+  ];
+  options.series = [
+    {},
+    ...weekdayLabels.map((label): uPlot.Series => ({
+      label,
+      stroke: "#f4f1e8",
+      width: 0,
+      points: {
+        show: true,
+        paths: heatmapSquarePaths(),
+        width: 2,
+        fill: HEATMAP_COLORS[0],
+      },
+    })),
+  ];
+  const data: uPlot.AlignedData = [
+    hours,
+    ...weekdayLabels.map((_, day) => (
+      hours.map((hour) => hasCell.has(`${day}-${hour}`) ? day : null)
+    )),
+  ];
+  return { kind: "heatmap", options, data, empty: false, heatmapValues: values };
 }
 
-function buildDistributionOptions(points: StatsPoint[]) {
+function buildDistributionOptions(points: StatsPoint[]): ChartBuild {
   const visible = pointsForRange(points, currentRange);
   const counts = visible.map((point) => point.count);
   const buckets = buildDistributionBuckets(counts);
+  if (buckets.length === 0) return buildEmptyChart("distribution");
+
   const totalSamples = counts.length || 1;
   const percentageData = buckets.map((bucket) => (bucket.count / totalSamples) * 100);
-  return { ...baseAxisOption(), tooltip: { trigger: "axis", backgroundColor: "#22292a", borderColor: "#35403e", textStyle: { color: "#f4f1e8" }, formatter: (params: Array<{ dataIndex: number; value: number }>) => { const item = params[0]; if (!item) return ""; const bucket = buckets[item.dataIndex]; return [bucket.label, tr("chart.tooltip.ofSamples", { percent: formatPercentage(item.value) }), tr("chart.tooltip.samplesCount", { count: formatLocaleNumber(bucket.count) })].join("<br />"); } }, grid: { left: 52, right: 24, top: 34, bottom: 74 }, xAxis: { type: "category", data: buckets.map((bucket) => bucket.label), axisLine: { lineStyle: { color: "#35403e" } }, axisLabel: { color: "#a9b1ad", rotate: 35 } }, yAxis: { type: "value", axisLabel: { color: "#a9b1ad", formatter: (value: number) => formatPercentage(value) }, splitLine: { lineStyle: { color: "rgba(169, 177, 173, 0.14)" } } }, series: [{ name: tr("chart.series.samplesPercent"), type: "bar", barMaxWidth: 38, itemStyle: { borderRadius: [4, 4, 0, 0], borderColor: "#35403e", borderWidth: 1, color: DISTRIBUTION_BAR_COLOR }, data: percentageData }], graphic: visible.length === 0 ? emptyGraphic() : null };
+  const indexes = buckets.map((_, index) => index);
+  const options = buildBaseOptions("distribution");
+  options.scales = {
+    x: { time: false, range: [-0.5, Math.max(0.5, buckets.length - 0.5)] },
+    y: { range: [0, Math.max(1, Math.ceil(Math.max(...percentageData) * 1.1))] },
+  };
+  options.axes = [
+    {
+      stroke: axisStroke(),
+      grid: { show: false },
+      ticks: { stroke: "#35403e" },
+      splits: () => indexes,
+      values: (_self, splits) => splits.map((index) => buckets[index]?.label ?? ""),
+      rotate: 35,
+      size: 82,
+    },
+    {
+      stroke: axisStroke(),
+      grid: { stroke: gridStroke() },
+      ticks: { stroke: "#35403e" },
+      values: (_self, splits) => splits.map((value) => formatPercentage(value)),
+    },
+  ];
+  options.series = [
+    {},
+    {
+      label: tr("chart.series.samplesPercent"),
+      stroke: "#35403e",
+      fill: DISTRIBUTION_BAR_COLOR,
+      width: 1,
+      paths: uPlot.paths.bars?.({ size: [0.72, 38], radius: [4, 0], gap: 2 }),
+      points: { show: false },
+    },
+  ];
+  return { kind: "distribution", options, data: [indexes, percentageData], empty: false, distributionBuckets: buckets };
 }
 
-function buildChartOptions(points: StatsPoint[]) {
+function buildChartOptions(points: StatsPoint[]): ChartBuild {
   if (activeChart === "heatmap") return buildHeatmapOptions(points);
   if (activeChart === "distribution") return buildDistributionOptions(points);
   return buildTimelineOptions(points);
 }
 
 function renderChart(): void {
-  if (!chart) {
-    chart = echarts.init(chartElement, null, { renderer: "canvas" });
+  if (!resizeListenerAttached) {
     window.addEventListener("resize", () => {
-      if (chart) chart.resize();
+      if (chart) chart.setSize(getChartSize());
     });
+    resizeListenerAttached = true;
   }
-  chart.setOption(buildChartOptions(allPoints), true);
+  const built = buildChartOptions(allPoints);
+  chart?.destroy();
+  chartElement.replaceChildren();
+  chartElement.classList.toggle("is-empty", built.empty);
+  chart = chartFactory(built.options, built.data, chartElement);
+  if (built.kind === "heatmap") {
+    const currentChart = chart;
+    requestAnimationFrame(() => currentChart.redraw?.(true, true));
+  }
+}
+
+function renderChartError(error: unknown): void {
+  console.warn(error);
+  chart?.destroy();
+  chart = null;
+  chartElement.replaceChildren();
+  chartElement.classList.add("is-empty");
+  chartElement.textContent = error instanceof Error ? error.message : tr("ui.noLiveData");
 }
 
 function render(): void {
   if (pendingRender) return;
   pendingRender = true;
-  whenAppReady().then(() => {
-    pendingRender = false;
-    renderChart();
-  });
+  whenAppReady()
+    .then(() => {
+      pendingRender = false;
+      renderChart();
+    })
+    .catch((error: unknown) => {
+      pendingRender = false;
+      renderChartError(error);
+    });
 }
 
 function mergePoints(...groups: StatsPoint[][]): StatsPoint[] {
@@ -600,8 +1079,6 @@ async function fetchHistoricalStats(): Promise<void> {
       render();
     },
   });
-
-  await (globalThis.__mushmomEchartsReady || Promise.resolve());
 
   await loader.loadArchiveStatsHistory<StatsPoint>({
     recentPayload: initial.recentPayload,
@@ -650,7 +1127,21 @@ rangeButtons.forEach((button) => {
   button.addEventListener("click", () => {
     currentRange = (button.dataset.range as ChartRange) || "7d";
     rangeButtons.forEach((item) => item.classList.toggle("is-active", item === button));
-    render();
+    if (!applyCurrentTimelineViewport()) render();
+  });
+});
+
+function updateBucketButtonState(): void {
+  bucketButtons.forEach((button) => {
+    button.disabled = activeChart !== "timeline";
+  });
+}
+
+bucketButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    currentTimelineBucket = (button.dataset.bucket as TimelineBucket) || "raw";
+    bucketButtons.forEach((item) => item.classList.toggle("is-active", item === button));
+    if (activeChart === "timeline") render();
   });
 });
 
@@ -658,9 +1149,12 @@ chartButtons.forEach((button) => {
   button.addEventListener("click", () => {
     activeChart = (button.dataset.chart as ChartKind) || "timeline";
     chartButtons.forEach((item) => item.classList.toggle("is-active", item === button));
+    updateBucketButtonState();
     render();
   });
 });
+
+updateBucketButtonState();
 
 window.addEventListener("mushmom:languagechange", () => {
   refreshStatusText();
@@ -685,15 +1179,24 @@ const testApi = {
   formatBucketRange,
   getHeatmapVisualBounds,
   getHeatmapPercentileRanks,
+  pointsForRange,
+  timelineViewportBounds,
+  timelineBucketsForMode,
+  timelineScaleSource,
+  timelineYBoundsForViewport,
+  expandedTimelineRange,
+  applyTimelineViewport,
   buildDistributionBuckets,
   buildBucketSummaries,
   buildTimelineOptions,
   buildHeatmapOptions,
   buildDistributionOptions,
   setCurrentRangeForTest: (range: ChartRange) => { currentRange = range; },
+  setCurrentTimelineBucketForTest: (bucket: TimelineBucket) => { currentTimelineBucket = bucket; },
   setActiveChartForTest: (chartName: ChartKind) => { activeChart = chartName; },
+  setChartFactoryForTest: (factory: ChartFactory) => { chartFactory = factory; },
 };
 
 globalThis.__MUSHMOM_TEST__ = testApi;
 
-export { initApp, normalizePayload, isKnownBadPoint, formatTime, formatTimelineAxisLabel, formatWeekdayLabels, formatBucketRange, getHeatmapVisualBounds, getHeatmapPercentileRanks, buildDistributionBuckets, buildBucketSummaries, buildTimelineOptions, buildHeatmapOptions, buildDistributionOptions, testApi };
+export { initApp, normalizePayload, isKnownBadPoint, formatTime, formatTimelineAxisLabel, formatWeekdayLabels, formatBucketRange, getHeatmapVisualBounds, getHeatmapPercentileRanks, pointsForRange, timelineViewportBounds, timelineBucketsForMode, timelineScaleSource, timelineYBoundsForViewport, expandedTimelineRange, applyTimelineViewport, buildDistributionBuckets, buildBucketSummaries, buildTimelineOptions, buildHeatmapOptions, buildDistributionOptions, testApi };

@@ -24,5 +24,8 @@
   "type": "module",
   "engines": {
     "node": ">=22.0.0"
+  },
+  "dependencies": {
+    "uplot": "^1.6.32"
   }
 }

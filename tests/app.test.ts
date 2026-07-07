@@ -3,9 +3,10 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type uPlot from "uplot";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { bundledLocaleRegistry as localeRegistry, bundledMessages as i18nMessages } from "../src/i18n/data";
-import { buildApiPreloadTags, buildEchartsLoaderScript, CHINA_ECHARTS_CDN, GLOBAL_ECHARTS_CDN, injectStartupHtml } from "../vite.config";
+import { buildApiPreloadTags, injectStartupHtml } from "../vite.config";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -16,11 +17,13 @@ type StubElement = {
   textContent: string;
   disabled: boolean;
   dataset: Record<string, string>;
-  classList: { toggle: () => void };
+  classList: { toggle: (name?: string, force?: boolean) => void };
   append: () => void;
-  addEventListener: () => void;
+  addEventListener: (type: string, listener: () => void) => void;
   replaceChildren: () => void;
   setAttribute: (name: string, value: string) => void;
+  clientWidth: number;
+  clientHeight: number;
   attrs?: Record<string, string>;
 };
 
@@ -51,6 +54,8 @@ function createStubElement(overrides: Partial<StubElement> = {}): StubElement {
     append() {},
     addEventListener() {},
     replaceChildren() {},
+    clientWidth: 840,
+    clientHeight: 470,
     setAttribute(name: string, value: string) {
       this.attrs ??= {};
       this.attrs[name] = value;
@@ -84,6 +89,8 @@ function createBaseGlobals(overrides: GlobalOverrides = {}) {
       return { type, ...init };
     },
     navigator: { languages: ["en-US"], language: "en-US" },
+    devicePixelRatio: 1,
+    matchMedia: () => ({ addEventListener() {}, removeEventListener() {} }),
     ...overrides,
   };
   globals.window = { ...globals, location: { origin: "https://mushmom.test" }, addEventListener() {}, setInterval() {}, dispatchEvent() {} };
@@ -141,19 +148,12 @@ async function loadI18nModule() {
 }
 
 async function loadAppModule(currentLang = "en-US") {
-  const renderedOptions: unknown[] = [];
+  vi.resetModules();
   const translate = buildTranslator(currentLang);
   const globals = createBaseGlobals({
     document: createStubDocument(),
     navigator: { languages: [currentLang], language: currentLang },
     fetch: mockFetch({ usercount: 0, data: [[1776945603, 1459]], chunks: [] }),
-    echarts: {
-      init: () => ({
-        setOption(option: unknown) { renderedOptions.push(option); },
-        resize() {},
-      }),
-    },
-    __mushmomEchartsReady: Promise.resolve(),
     MushmomI18n: {
       ready: Promise.resolve(),
       t: translate,
@@ -165,12 +165,10 @@ async function loadAppModule(currentLang = "en-US") {
 
   (globals.window as Record<string, unknown>).MushmomI18n = globals.MushmomI18n;
   (globals.window as Record<string, unknown>).MushmomStatsLoader = globals.MushmomStatsLoader;
-  (globals.window as Record<string, unknown>).echarts = globals.echarts;
   (globals.window as Record<string, unknown>).fetch = globals.fetch;
-  (globals.window as Record<string, unknown>).__mushmomEchartsReady = globals.__mushmomEchartsReady;
 
   stubGlobals(globals);
-  return { module: await import("../src/app") as AppModule, globals, renderedOptions };
+  return { module: await import("../src/app") as AppModule, globals };
 }
 
 async function loadStatsModule() {
@@ -296,21 +294,16 @@ describe("vite migration", () => {
     ]);
   });
 
-  it("injects API preloads before the ECharts loader and module startup", () => {
-    const script = buildEchartsLoaderScript();
+  it("injects API preloads before module startup", () => {
     const transformed = injectStartupHtml(indexHtml);
     const recentPreload = '<link rel="preload" href="/api/stats/2026-07" as="fetch" crossorigin>';
     const initialPreload = `<link rel="preload" href="/assets/stats/${statsManifest.chunks[0]?.file}" as="fetch" crossorigin>`;
     const currentPreload = '<link rel="preload" href="/api/current" as="fetch" crossorigin>';
-    expect(script).toContain(GLOBAL_ECHARTS_CDN);
-    expect(script).toContain(CHINA_ECHARTS_CDN);
-    expect(script).toContain("window.__mushmomEchartsReady");
-    expect(script).toContain("document.head.appendChild(script)");
-    expect(transformed.indexOf(recentPreload)).toBeLessThan(transformed.indexOf(script));
-    expect(transformed.indexOf(initialPreload)).toBeLessThan(transformed.indexOf(script));
-    expect(transformed.indexOf(currentPreload)).toBeLessThan(transformed.indexOf(script));
-    expect(transformed.indexOf(script)).toBeLessThan(transformed.indexOf('<script type="module" src="/src/main.ts"></script>'));
+    expect(transformed.indexOf(recentPreload)).toBeLessThan(transformed.indexOf('<script type="module" src="/src/main.ts"></script>'));
+    expect(transformed.indexOf(initialPreload)).toBeLessThan(transformed.indexOf('<script type="module" src="/src/main.ts"></script>'));
+    expect(transformed.indexOf(currentPreload)).toBeLessThan(transformed.indexOf('<script type="module" src="/src/main.ts"></script>'));
     expect(indexHtml).not.toContain("echarts@6.1.0");
+    expect(transformed).not.toContain("__mushmomEchartsReady");
   });
 });
 
@@ -446,22 +439,413 @@ describe("bundled i18n", () => {
 });
 
 describe("app behavior", () => {
-  it("uses line for 7d and range band for longer bucketed ranges", async () => {
+  it("uses all timeline data while setting the selected range as the initial viewport", async () => {
     const { module, globals } = await loadAppModule();
     useWindow(globals);
     const points = [
-      { date: new Date(Date.UTC(2026, 3, 24, 12, 0, 0)), count: 1200 },
-      { date: new Date(Date.UTC(2026, 3, 24, 13, 0, 0)), count: 1250 },
+      { date: new Date(Date.UTC(2026, 0, 1, 12, 0, 0)), count: 5000 },
+      { date: new Date(Date.UTC(2026, 0, 9, 12, 0, 0)), count: 100 },
+      { date: new Date(Date.UTC(2026, 0, 10, 12, 0, 0)), count: 200 },
     ];
     module.testApi.setCurrentRangeForTest("7d");
-    expect(module.buildTimelineOptions(points).series[0]?.type).toBe("line");
+    const sevenDayOptions = module.buildTimelineOptions(points);
+    const latest = points[points.length - 1].date.getTime();
+    expect(sevenDayOptions.options.series).toHaveLength(2);
+    expect(sevenDayOptions.data).toEqual([
+      points.map((point) => point.date.getTime()),
+      points.map((point) => point.count),
+    ]);
+    expect(sevenDayOptions.options.scales?.x).toMatchObject({ min: latest - 7 * 24 * 60 * 60 * 1000, max: latest });
+    expect(sevenDayOptions.options.scales?.y?.range).toEqual([0, 208]);
+
     module.testApi.setCurrentRangeForTest("28d");
-    const bucketedOptions = module.buildTimelineOptions(points);
-    const bucketedSeries = bucketedOptions.series as Array<{ id?: string; type?: string }>;
-    expect(bucketedSeries.map((series) => series.type)).toEqual(["line", "line", "line"]);
-    expect(bucketedSeries[0]?.id).toBe("range-base");
-    expect(bucketedSeries[1]?.id).toBe("range-spread");
-    expect(bucketedSeries[2]?.id).toBe("bucket-average");
+    const longerRangeOptions = module.buildTimelineOptions(points);
+    expect(longerRangeOptions.options.series).toHaveLength(2);
+    expect(longerRangeOptions.options.bands).toBeUndefined();
+    expect(longerRangeOptions.data).toEqual([
+      points.map((point) => point.date.getTime()),
+      points.map((point) => point.count),
+    ]);
+    expect(longerRangeOptions.options.scales?.y?.range).toEqual([0, 5200]);
+  });
+
+  it("builds bucketed timeline data with min, max, and average series", async () => {
+    const { module, globals } = await loadAppModule();
+    useWindow(globals);
+    const points = [
+      { date: new Date(Date.UTC(2026, 0, 1, 0, 0, 0)), count: 100 },
+      { date: new Date(Date.UTC(2026, 0, 1, 12, 0, 0)), count: 300 },
+      { date: new Date(Date.UTC(2026, 0, 2, 0, 0, 0)), count: 500 },
+      { date: new Date(Date.UTC(2026, 0, 10, 0, 0, 0)), count: 1000 },
+    ];
+    module.testApi.setCurrentRangeForTest("7d");
+    module.testApi.setCurrentTimelineBucketForTest("1d");
+
+    const built = module.buildTimelineOptions(points);
+
+    expect(built.options.series).toHaveLength(4);
+    expect(built.options.bands).toEqual([{ series: [1, 2], fill: "rgba(125, 216, 125, 0.24)" }]);
+    expect(built.timelineBuckets).toHaveLength(3);
+    expect(built.data).toEqual([
+      built.timelineBuckets?.map((bucket) => bucket.time),
+      [300, 500, 1000],
+      [100, 500, 1000],
+      [200, 500, 1000],
+    ]);
+    expect(built.options.scales?.y?.range).toEqual([0, 1040]);
+
+    const eightHourBuckets = module.timelineBucketsForMode([
+      { date: new Date(Date.UTC(2026, 0, 1, 1, 0, 0)), count: 100 },
+      { date: new Date(Date.UTC(2026, 0, 1, 7, 0, 0)), count: 300 },
+      { date: new Date(Date.UTC(2026, 0, 1, 8, 0, 0)), count: 500 },
+    ], "8h");
+    expect(eightHourBuckets.map((bucket) => bucket.samples)).toEqual([2, 1]);
+  });
+
+  it("derives timeline viewport bounds for trailing, ytd, and all ranges", async () => {
+    const { module } = await loadAppModule();
+    const points = [
+      { date: new Date(Date.UTC(2025, 11, 30, 12, 0, 0)), count: 1 },
+      { date: new Date(Date.UTC(2026, 0, 10, 12, 0, 0)), count: 2 },
+    ];
+    const latest = points[1].date.getTime();
+
+    expect(module.timelineViewportBounds(points, "7d")).toEqual({ min: latest - 7 * 24 * 60 * 60 * 1000, max: latest });
+    expect(module.timelineViewportBounds(points, "ytd")).toEqual({ min: new Date(2026, 0, 1).getTime(), max: latest });
+    expect(module.timelineViewportBounds(points, "all")).toEqual({ min: points[0].date.getTime(), max: latest });
+  });
+
+  it("doubles timeline x ranges while staying within the data range", async () => {
+    const { module } = await loadAppModule();
+    const xValues = [0, 1000];
+
+    expect(module.expandedTimelineRange(400, 600, xValues)).toEqual({ min: 300, max: 700 });
+    expect(module.expandedTimelineRange(0, 200, xValues)).toEqual({ min: 0, max: 400 });
+    expect(module.expandedTimelineRange(800, 1000, xValues)).toEqual({ min: 600, max: 1000 });
+    expect(module.expandedTimelineRange(250, 850, xValues)).toEqual({ min: 0, max: 1000 });
+    expect(module.expandedTimelineRange(0, 1000, xValues)).toEqual({ min: 0, max: 1000 });
+    expect(module.expandedTimelineRange(undefined, undefined, xValues)).toEqual({ min: 0, max: 1000 });
+    expect(module.expandedTimelineRange(0, 100, [])).toBeNull();
+  });
+
+  it("uses double-click to expand timeline zoom instead of resetting it", async () => {
+    const { module, globals } = await loadAppModule();
+    useWindow(globals);
+    const points = [
+      { date: new Date(0), count: 1200 },
+      { date: new Date(1000), count: 1250 },
+    ];
+    const built = module.buildTimelineOptions(points);
+    const setScale = vi.fn();
+    const defaultHandler = vi.fn();
+    const listener = built.options.cursor?.bind?.dblclick?.(
+      { scales: { x: { min: 400, max: 600 } }, setScale } as unknown as uPlot,
+      createStubElement() as unknown as HTMLElement,
+      defaultHandler,
+    );
+    const event = {
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    } as unknown as MouseEvent;
+
+    listener?.(event);
+
+    expect(defaultHandler).not.toHaveBeenCalled();
+    expect(setScale).toHaveBeenCalledWith("x", { min: 300, max: 700 });
+    expect(setScale).toHaveBeenCalledWith("y", { min: 0, max: 1300 });
+  });
+
+  it("uses double-click to expand bucketed timeline zoom and recalculate y from visible buckets", async () => {
+    const { module, globals } = await loadAppModule();
+    useWindow(globals);
+    const points = [
+      { date: new Date(Date.UTC(2026, 0, 1, 12, 0, 0)), count: 100 },
+      { date: new Date(Date.UTC(2026, 0, 1, 12, 0, 1)), count: 200 },
+      { date: new Date(Date.UTC(2026, 0, 2, 12, 0, 0)), count: 1200 },
+      { date: new Date(Date.UTC(2026, 0, 2, 12, 0, 1)), count: 1250 },
+    ];
+    module.testApi.setCurrentTimelineBucketForTest("1d");
+    const built = module.buildTimelineOptions(points);
+    const firstBucket = (built.data[0] as number[])[0];
+    const setScale = vi.fn();
+    const listener = built.options.cursor?.bind?.dblclick?.(
+      { scales: { x: { min: firstBucket, max: firstBucket + 1000 } }, setScale } as unknown as uPlot,
+      createStubElement() as unknown as HTMLElement,
+      vi.fn(),
+    );
+
+    listener?.({ preventDefault() {}, stopPropagation() {} } as MouseEvent);
+
+    expect(setScale).toHaveBeenCalledWith("x", module.expandedTimelineRange(firstBucket, firstBucket + 1000, built.data[0] as number[]));
+    expect(setScale).toHaveBeenCalledWith("y", { min: 0, max: 208 });
+  });
+
+  it("updates timeline range clicks in place without rebuilding the chart", async () => {
+    const rangeListeners = new Map<string, () => void>();
+    const rangeButtons = ["7d", "28d"].map((range) => createStubElement({
+      dataset: { range },
+      addEventListener: (_type: string, listener: () => void) => { rangeListeners.set(range, listener); },
+    }));
+    const chartTarget = createStubElement();
+    const loader = buildStatsLoader();
+    loader.loadInitialStatsHistory = async (options: LoadInitialStatsHistoryOptions<StatsPoint>) => {
+      const recentPayload = [
+        [Date.UTC(2026, 0, 1, 12, 0, 0) / 1000, 5000] as [number, number],
+        [Date.UTC(2026, 0, 10, 12, 0, 0) / 1000, 200] as [number, number],
+      ];
+      const result = { points: options.normalizePayload(recentPayload), recentPayload, manifest: makeManifest([]) };
+      options.onInitial?.(result);
+      return result;
+    };
+    const globals = createBaseGlobals({
+      document: createStubDocument({
+        querySelector: (selector: string) => (selector === "#population-chart" ? chartTarget : createStubElement()),
+        querySelectorAll: (selector: string) => (selector === "[data-range]" ? rangeButtons : []),
+      }),
+      fetch: mockFetch({ usercount: 1700 }),
+      MushmomI18n: {
+        ready: Promise.resolve(),
+        t: buildTranslator("en-US"),
+        getCurrentLang: () => "en-US",
+        setLang: (lang: string) => lang,
+      },
+      MushmomStatsLoader: loader,
+    });
+    (globals.window as Record<string, unknown>).MushmomI18n = globals.MushmomI18n;
+    (globals.window as Record<string, unknown>).MushmomStatsLoader = globals.MushmomStatsLoader;
+    (globals.window as Record<string, unknown>).fetch = globals.fetch;
+    stubGlobals(globals);
+    vi.resetModules();
+    const module = await import("../src/app") as AppModule;
+    const setScale = vi.fn();
+    const destroy = vi.fn();
+    const builds: unknown[] = [];
+    module.testApi.setChartFactoryForTest((options, data) => {
+      builds.push({ options, data });
+      return { destroy, setScale, setSize() {} };
+    });
+    useWindow(globals);
+
+    module.initApp();
+    await flushPromises();
+    rangeListeners.get("28d")?.();
+
+    expect(builds).toHaveLength(1);
+    expect(destroy).not.toHaveBeenCalled();
+    expect(setScale).toHaveBeenCalledWith("x", {
+      min: Date.UTC(2026, 0, 10, 12, 0, 0) - 28 * 24 * 60 * 60 * 1000,
+      max: Date.UTC(2026, 0, 10, 12, 0, 0),
+    });
+    expect(setScale).toHaveBeenCalledWith("y", { min: 0, max: 5200 });
+  });
+
+  it("updates bucketed timeline range clicks in place using bucket min/max y bounds", async () => {
+    const rangeListeners = new Map<string, () => void>();
+    const rangeButtons = ["7d", "28d"].map((range) => createStubElement({
+      dataset: { range },
+      addEventListener: (_type: string, listener: () => void) => { rangeListeners.set(range, listener); },
+    }));
+    const chartTarget = createStubElement();
+    const loader = buildStatsLoader();
+    loader.loadInitialStatsHistory = async (options: LoadInitialStatsHistoryOptions<StatsPoint>) => {
+      const recentPayload = [
+        [Date.UTC(2026, 0, 1, 0, 0, 0) / 1000, 5000] as [number, number],
+        [Date.UTC(2026, 0, 10, 0, 0, 0) / 1000, 200] as [number, number],
+      ];
+      const result = { points: options.normalizePayload(recentPayload), recentPayload, manifest: makeManifest([]) };
+      options.onInitial?.(result);
+      return result;
+    };
+    const globals = createBaseGlobals({
+      document: createStubDocument({
+        querySelector: (selector: string) => (selector === "#population-chart" ? chartTarget : createStubElement()),
+        querySelectorAll: (selector: string) => (selector === "[data-range]" ? rangeButtons : []),
+      }),
+      fetch: mockFetch({ usercount: 1700 }),
+      MushmomI18n: {
+        ready: Promise.resolve(),
+        t: buildTranslator("en-US"),
+        getCurrentLang: () => "en-US",
+        setLang: (lang: string) => lang,
+      },
+      MushmomStatsLoader: loader,
+    });
+    (globals.window as Record<string, unknown>).MushmomI18n = globals.MushmomI18n;
+    (globals.window as Record<string, unknown>).MushmomStatsLoader = globals.MushmomStatsLoader;
+    (globals.window as Record<string, unknown>).fetch = globals.fetch;
+    stubGlobals(globals);
+    vi.resetModules();
+    const module = await import("../src/app") as AppModule;
+    module.testApi.setCurrentTimelineBucketForTest("1d");
+    const setScale = vi.fn();
+    const builds: unknown[] = [];
+    module.testApi.setChartFactoryForTest((options, data) => {
+      builds.push({ options, data });
+      return { destroy() {}, setScale, setSize() {} };
+    });
+    useWindow(globals);
+
+    module.initApp();
+    await flushPromises();
+    rangeListeners.get("28d")?.();
+
+    expect(builds).toHaveLength(1);
+    expect(setScale).toHaveBeenCalledWith("x", {
+      min: Date.UTC(2026, 0, 10, 0, 0, 0) - 28 * 24 * 60 * 60 * 1000,
+      max: Date.UTC(2026, 0, 10, 0, 0, 0),
+    });
+    expect(setScale).toHaveBeenCalledWith("y", { min: 0, max: 5200 });
+  });
+
+  it("rebuilds the timeline when bucket controls change and disables them outside timeline", async () => {
+    const bucketListeners = new Map<string, () => void>();
+    const bucketButtons = ["raw", "1d"].map((bucket) => createStubElement({
+      dataset: { bucket },
+      addEventListener: (_type: string, listener: () => void) => { bucketListeners.set(bucket, listener); },
+    }));
+    const chartListeners = new Map<string, () => void>();
+    const chartButtons = ["timeline", "heatmap"].map((chartName) => createStubElement({
+      dataset: { chart: chartName },
+      addEventListener: (_type: string, listener: () => void) => { chartListeners.set(chartName, listener); },
+    }));
+    const chartTarget = createStubElement();
+    const loader = buildStatsLoader();
+    loader.loadInitialStatsHistory = async (options: LoadInitialStatsHistoryOptions<StatsPoint>) => {
+      const recentPayload = [
+        [Date.UTC(2026, 0, 1, 0, 0, 0) / 1000, 100] as [number, number],
+        [Date.UTC(2026, 0, 1, 12, 0, 0) / 1000, 300] as [number, number],
+      ];
+      const result = { points: options.normalizePayload(recentPayload), recentPayload, manifest: makeManifest([]) };
+      options.onInitial?.(result);
+      return result;
+    };
+    const globals = createBaseGlobals({
+      document: createStubDocument({
+        querySelector: (selector: string) => (selector === "#population-chart" ? chartTarget : createStubElement()),
+        querySelectorAll: (selector: string) => {
+          if (selector === "[data-bucket]") return bucketButtons;
+          if (selector === "[data-chart]") return chartButtons;
+          return [];
+        },
+      }),
+      requestAnimationFrame: (callback: FrameRequestCallback) => {
+        callback(0);
+        return 0;
+      },
+      fetch: mockFetch({ usercount: 1700 }),
+      MushmomI18n: {
+        ready: Promise.resolve(),
+        t: buildTranslator("en-US"),
+        getCurrentLang: () => "en-US",
+        setLang: (lang: string) => lang,
+      },
+      MushmomStatsLoader: loader,
+    });
+    (globals.window as Record<string, unknown>).MushmomI18n = globals.MushmomI18n;
+    (globals.window as Record<string, unknown>).MushmomStatsLoader = globals.MushmomStatsLoader;
+    (globals.window as Record<string, unknown>).fetch = globals.fetch;
+    stubGlobals(globals);
+    vi.resetModules();
+    const module = await import("../src/app") as AppModule;
+    const builds: Array<{ data: uPlot.AlignedData }> = [];
+    module.testApi.setChartFactoryForTest((options, data) => {
+      builds.push({ data });
+      return { destroy() {}, redraw() {}, setScale: vi.fn(), setSize() {} };
+    });
+    useWindow(globals);
+
+    module.initApp();
+    await flushPromises();
+    bucketListeners.get("1d")?.();
+    await flushPromises();
+
+    expect(builds).toHaveLength(2);
+    expect(builds[1].data).toHaveLength(4);
+    expect(bucketButtons.map((button) => button.disabled)).toEqual([false, false]);
+
+    chartListeners.get("heatmap")?.();
+    await flushPromises();
+    expect(bucketButtons.map((button) => button.disabled)).toEqual([true, true]);
+
+    chartListeners.get("timeline")?.();
+    await flushPromises();
+    expect(bucketButtons.map((button) => button.disabled)).toEqual([false, false]);
+  });
+
+  it("keeps heatmap and distribution range clicks on the rebuild path", async () => {
+    const rangeListeners = new Map<string, () => void>();
+    const rangeButtons = ["7d", "28d"].map((range) => createStubElement({
+      dataset: { range },
+      addEventListener: (_type: string, listener: () => void) => { rangeListeners.set(range, listener); },
+    }));
+    const chartListeners = new Map<string, () => void>();
+    const chartButtons = ["timeline", "heatmap", "distribution"].map((chartName) => createStubElement({
+      dataset: { chart: chartName },
+      addEventListener: (_type: string, listener: () => void) => { chartListeners.set(chartName, listener); },
+    }));
+    const chartTarget = createStubElement();
+    const loader = buildStatsLoader();
+    loader.loadInitialStatsHistory = async (options: LoadInitialStatsHistoryOptions<StatsPoint>) => {
+      const recentPayload = [
+        [Date.UTC(2026, 0, 1, 12, 0, 0) / 1000, 5000] as [number, number],
+        [Date.UTC(2026, 0, 10, 12, 0, 0) / 1000, 200] as [number, number],
+      ];
+      const result = { points: options.normalizePayload(recentPayload), recentPayload, manifest: makeManifest([]) };
+      options.onInitial?.(result);
+      return result;
+    };
+    const globals = createBaseGlobals({
+      document: createStubDocument({
+        querySelector: (selector: string) => (selector === "#population-chart" ? chartTarget : createStubElement()),
+        querySelectorAll: (selector: string) => {
+          if (selector === "[data-range]") return rangeButtons;
+          if (selector === "[data-chart]") return chartButtons;
+          return [];
+        },
+      }),
+      requestAnimationFrame: (callback: FrameRequestCallback) => {
+        callback(0);
+        return 0;
+      },
+      fetch: mockFetch({ usercount: 1700 }),
+      MushmomI18n: {
+        ready: Promise.resolve(),
+        t: buildTranslator("en-US"),
+        getCurrentLang: () => "en-US",
+        setLang: (lang: string) => lang,
+      },
+      MushmomStatsLoader: loader,
+    });
+    (globals.window as Record<string, unknown>).MushmomI18n = globals.MushmomI18n;
+    (globals.window as Record<string, unknown>).MushmomStatsLoader = globals.MushmomStatsLoader;
+    (globals.window as Record<string, unknown>).fetch = globals.fetch;
+    stubGlobals(globals);
+    vi.resetModules();
+    const module = await import("../src/app") as AppModule;
+    const builds: Array<{ data: uPlot.AlignedData }> = [];
+    module.testApi.setChartFactoryForTest((options, data) => {
+      builds.push({ data });
+      return { destroy() {}, redraw() {}, setScale: vi.fn(), setSize() {} };
+    });
+    useWindow(globals);
+
+    module.initApp();
+    await flushPromises();
+    chartListeners.get("heatmap")?.();
+    await flushPromises();
+    rangeListeners.get("28d")?.();
+    await flushPromises();
+
+    expect(builds.length).toBeGreaterThanOrEqual(3);
+    expect(builds.at(-1)?.data[0]).toEqual(Array.from({ length: 24 }, (_, hour) => hour));
+
+    chartListeners.get("distribution")?.();
+    await flushPromises();
+    rangeListeners.get("7d")?.();
+    await flushPromises();
+
+    expect(builds.length).toBeGreaterThanOrEqual(5);
+    expect(builds.at(-1)?.data).toEqual([[0, 1, 2], [0, 0, 100]]);
   });
 
   it("uses compact bucket ranges in bucket tooltips", async () => {
@@ -485,6 +869,20 @@ describe("app behavior", () => {
     expect(buckets.length).toBe(2);
     expect(buckets[0]).toMatchObject({ min: 1100, max: 1300, samples: 3 });
     expect(buckets[1]).toMatchObject({ min: 1400, max: 1500, samples: 2 });
+  });
+
+  it("slices sorted points for range windows", async () => {
+    const { module } = await loadAppModule();
+    const points = [
+      { date: new Date("2025-12-30T23:00:00Z"), count: 1 },
+      { date: new Date("2026-01-01T00:00:00Z"), count: 2 },
+      { date: new Date("2026-01-07T00:00:00Z"), count: 3 },
+      { date: new Date("2026-01-08T00:00:00Z"), count: 4 },
+    ];
+
+    expect(module.pointsForRange(points, "24h").map((point) => point.count)).toEqual([3, 4]);
+    expect(module.pointsForRange(points, "ytd").map((point) => point.count)).toEqual([2, 3, 4]);
+    expect(module.pointsForRange(points, "all")).toBe(points);
   });
 
   it("accepts compact rows and non-negative counts while removing configured bad samples", async () => {
@@ -536,7 +934,7 @@ describe("app behavior", () => {
       { date: new Date(2026, 0, 1, 2), count: 2400 },
       { date: new Date(2026, 0, 1, 3), count: 2600 },
     ]);
-    const heatmapData = (options.series[0]?.data || []) as Array<[number, number, number | null, number, Record<string, number>, number]>;
+    const heatmapData = options.heatmapValues || [];
     const scoresByCount = new Map(heatmapData.map(([, , score, count]) => [count, score]));
 
     expect(scoresByCount.get(2000)).toBe(82);
@@ -545,13 +943,26 @@ describe("app behavior", () => {
     expect(scoresByCount.get(2600)).toBe(98);
   });
 
-  it("waits for ECharts before loading archive stats", async () => {
-    let resolveEcharts!: () => void;
-    const echartsReady = new Promise<void>((resolve) => {
-      resolveEcharts = resolve;
-    });
+  it("renders heatmap buckets as scatter points by hour and weekday", async () => {
+    const { module, globals } = await loadAppModule();
+    useWindow(globals);
+    module.testApi.setCurrentRangeForTest("7d");
+    const thursdayMidnight = new Date(2026, 0, 1, 0);
+    const options = module.buildHeatmapOptions([{ date: thursdayMidnight, count: 2000 }]);
+    const yValues = options.data.slice(1).flat().filter((value) => value != null);
+
+    expect(options.options.legend?.show).toBe(false);
+    expect(options.options.scales?.y?.range).toEqual([-0.5, 6.5]);
+    expect(options.options.plugins).toHaveLength(1);
+    expect(options.options.series).toHaveLength(8);
+    expect(typeof options.options.series[1]?.points?.paths).toBe("function");
+    expect(options.data[0]).toEqual(Array.from({ length: 24 }, (_, hour) => hour));
+    expect(yValues).toEqual([thursdayMidnight.getDay()]);
+  });
+
+  it("loads archive stats without waiting for an external chart loader", async () => {
     const calls: string[] = [];
-    const renderedOptions: unknown[] = [];
+    const renderedCharts: unknown[] = [];
     const recentPayload = [[1777594504, 1700] as [number, number], [1775001608, 1317] as [number, number]];
     const archivePayload = { data: [[1767224706, 1200] as [number, number]] };
     const manifest = makeManifest([
@@ -579,13 +990,6 @@ describe("app behavior", () => {
     const globals = createBaseGlobals({
       document: createStubDocument(),
       fetch: mockFetch({ usercount: 1700 }),
-      echarts: {
-        init: () => ({
-          setOption(option: unknown) { renderedOptions.push(option); },
-          resize() {},
-        }),
-      },
-      __mushmomEchartsReady: echartsReady,
       MushmomI18n: {
         ready: Promise.resolve(),
         t: translate,
@@ -596,24 +1000,20 @@ describe("app behavior", () => {
     });
     (globals.window as Record<string, unknown>).MushmomI18n = globals.MushmomI18n;
     (globals.window as Record<string, unknown>).MushmomStatsLoader = globals.MushmomStatsLoader;
-    (globals.window as Record<string, unknown>).echarts = globals.echarts;
     (globals.window as Record<string, unknown>).fetch = globals.fetch;
-    (globals.window as Record<string, unknown>).__mushmomEchartsReady = echartsReady;
     stubGlobals(globals);
     const module = await import("../src/app") as AppModule;
+    module.testApi.setChartFactoryForTest((options, data) => {
+      renderedCharts.push({ options, data });
+      return { destroy() {}, setSize() {} };
+    });
     useWindow(globals);
 
     module.initApp();
     await flushPromises();
 
-    expect(calls).toEqual(["initial"]);
-    expect(renderedOptions).toHaveLength(0);
-
-    resolveEcharts();
-    await flushPromises();
-
     expect(calls).toEqual(["initial", "archive"]);
-    expect(renderedOptions.length).toBeGreaterThan(0);
+    expect(renderedCharts.length).toBeGreaterThan(0);
   });
 });
 

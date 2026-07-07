@@ -1,3 +1,4 @@
+import "uplot/dist/uPlot.min.css";
 import "./styles.css";
 import { initI18n } from "./i18n/index";
 import "./load";

@@ -34,12 +34,8 @@ interface LoadInitialStatsHistoryOptions<TPoint> { archiveBaseUrl?: string; stat
 interface LoadArchiveStatsHistoryOptions<TPoint> { archiveBaseUrl?: string; recentPayload: StatsPayload; manifest: StatsManifest; normalizePayload: (payload: StatsPayload) => TPoint[]; onArchive?: (payload: ArchiveStatsHistoryResult<TPoint>) => void; fetcher?: (url: string) => Promise<unknown>; }
 interface LoadStatsHistoryOptions<TPoint> extends LoadInitialStatsHistoryOptions<TPoint> { archiveBaseUrl?: string; onArchive?: (payload: ArchiveStatsHistoryResult<TPoint>) => void; }
 interface MushmomStatsLoaderApi { loadStatsHistory<TPoint>(options: LoadStatsHistoryOptions<TPoint>): Promise<void>; loadInitialStatsHistory<TPoint>(options: LoadInitialStatsHistoryOptions<TPoint>): Promise<InitialStatsHistoryResult<TPoint>>; loadArchiveStatsHistory<TPoint>(options: LoadArchiveStatsHistoryOptions<TPoint>): Promise<ArchiveStatsHistoryResult<TPoint>>; selectArchiveChunks(manifest: StatsManifest, recentPayload: StatsPayload): StatsManifestChunk[]; oldestPayloadTimestamp(payload: StatsPayload): number; }
-interface EChartsInstance { setOption(option: unknown, notMerge?: boolean): void; resize(): void; }
-interface EChartsLike { init(element: Element, theme?: unknown, opts?: unknown): EChartsInstance; }
 declare var MushmomI18n: MushmomI18nApi | undefined;
 declare var MushmomStatsLoader: MushmomStatsLoaderApi | undefined;
-declare var echarts: EChartsLike;
-declare var __mushmomEchartsReady: Promise<unknown> | undefined;
 declare var __MUSHMOM_TEST__: Record<string, unknown>;
-interface Window { MushmomI18n?: MushmomI18nApi; MushmomStatsLoader?: MushmomStatsLoaderApi; echarts?: EChartsLike; __mushmomEchartsReady?: Promise<unknown>; }
+interface Window { MushmomI18n?: MushmomI18nApi; MushmomStatsLoader?: MushmomStatsLoaderApi; }
 declare module "*.css";

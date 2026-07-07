@@ -203,6 +203,10 @@ h1 {
   background: var(--panel);
 }
 
+.bucket-control {
+  grid-template-columns: repeat(4, minmax(50px, 1fr));
+}
+
 .segmented-control button {
   min-height: 42px;
   border: 0;
@@ -226,6 +230,15 @@ h1 {
 .segmented-control button.is-active {
   background: var(--panel-strong);
   color: var(--text);
+}
+
+.segmented-control button:disabled {
+  color: rgba(169, 177, 173, 0.42);
+  cursor: not-allowed;
+}
+
+.segmented-control button:disabled:hover {
+  background: transparent;
 }
 
 .chart-tabs {
@@ -268,6 +281,61 @@ h1 {
 .chart {
   width: 100%;
   height: 470px;
+}
+
+.chart.is-empty {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.chart .uplot,
+.chart .u-wrap {
+  width: 100%;
+  height: 100%;
+  color: var(--muted);
+  font-family: inherit;
+}
+
+.chart .u-title {
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.chart .u-legend {
+  color: var(--muted);
+  background: transparent;
+}
+
+.chart .u-legend .u-value {
+  color: var(--text);
+}
+
+.chart .u-select {
+  background: rgba(125, 216, 125, 0.14);
+}
+
+.chart-tooltip {
+  position: absolute;
+  z-index: 3;
+  min-width: 150px;
+  max-width: min(260px, calc(100% - 24px));
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(34, 41, 42, 0.96);
+  box-shadow: var(--shadow);
+  color: var(--text);
+  font-size: 0.82rem;
+  line-height: 1.45;
+  pointer-events: none;
+}
+
+.chart-tooltip strong {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--accent-strong);
 }
 
 .details {
@@ -382,6 +450,10 @@ h1 {
 
   .segmented-control button:nth-child(-n + 4) {
     border-bottom: 1px solid var(--line);
+  }
+
+  .bucket-control button:nth-child(-n + 4) {
+    border-bottom: 0;
   }
 
   .chart-tabs {
