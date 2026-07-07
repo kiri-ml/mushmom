@@ -127,9 +127,6 @@ function validateManifest(value: unknown): StatsManifest {
     throw new Error("Stats manifest has an invalid format.");
   }
   if (!Array.isArray(value.chunks)) throw new Error("Stats manifest chunks must be an array.");
-  const horizon = new Date(`${archiveThroughPeriod}-01T00:00:00Z`);
-  const rollingStart = new Date(Date.UTC(horizon.getUTCFullYear(), horizon.getUTCMonth() - 11, 1));
-  const monthlyStartYear = rollingStart.getUTCFullYear();
   let previous: StatsManifestChunk | undefined;
   const chunks = value.chunks.map((entry, index) => {
     if (!isRecord(entry)) throw new Error(`Stats manifest chunk ${index + 1} is invalid.`);
@@ -145,14 +142,12 @@ function validateManifest(value: unknown): StatsManifest {
       throw new Error(`Stats manifest chunk ${index + 1} is invalid.`);
     }
     const chunk = entry as unknown as StatsManifestChunk;
-    const chunkYear = Number(chunk.period.slice(0, 4));
-    const expectedGranularity = chunkYear < monthlyStartYear ? "year" : "month";
     const timestampLength = chunk.granularity === "year" ? 4 : 7;
     const boundsMatchPeriod = [chunk.minTimestamp, chunk.maxTimestamp].every((timestamp) => (
       periodForTimestamp(timestamp, timestampLength) === chunk.period
     ));
-    if (chunk.granularity !== expectedGranularity || !boundsMatchPeriod) {
-      throw new Error(`Stats manifest chunk ${index + 1} has invalid partitioning or bounds.`);
+    if (!boundsMatchPeriod) {
+      throw new Error(`Stats manifest chunk ${index + 1} has invalid bounds.`);
     }
     if (chunk.period > archiveThroughPeriod || (previous && (previous.period <= chunk.period || previous.minTimestamp <= chunk.maxTimestamp))) {
       throw new Error("Stats manifest chunks must be newest-first and non-overlapping.");
@@ -161,6 +156,19 @@ function validateManifest(value: unknown): StatsManifest {
     return chunk;
   });
   return { ...value, format: value.format, chunks } as unknown as StatsManifest;
+}
+
+function validateManifestPartition(value: unknown): StatsManifest {
+  const manifest = validateManifest(value);
+  const horizon = parseMonthKey(manifest.archiveThroughPeriod);
+  if (!horizon) throw new Error("Stats manifest has an invalid archiveThroughPeriod.");
+  manifest.chunks.forEach((chunk, index) => {
+    const expectedGranularity = isMonthlyArchivePeriod(chunk.period, horizon) ? "month" : "year";
+    if (chunk.granularity !== expectedGranularity) {
+      throw new Error(`Stats manifest chunk ${index + 1} has invalid partitioning.`);
+    }
+  });
+  return manifest;
 }
 
 function validateChunk(value: unknown, entry: StatsManifestChunk): StatsPayload {
@@ -196,6 +204,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function isNonnegativeInteger(value: unknown): value is number { return Number.isSafeInteger(value) && Number(value) >= 0; }
+function parseMonthKey(month: string): { year: number; month: number } | null {
+  if (!isMonthKey(month)) return null;
+  return { year: Number(month.slice(0, 4)), month: Number(month.slice(5, 7)) };
+}
+function isMonthlyArchivePeriod(period: string, horizon: { year: number; month: number }): boolean {
+  const parsed = parseMonthKey(period);
+  if (!parsed) return false;
+  if (parsed.year === horizon.year) return parsed.month <= horizon.month;
+  return horizon.month === 1 && parsed.year === horizon.year - 1;
+}
 function periodForTimestamp(timestamp: number, length: 4 | 7): string | null {
   const date = new Date(timestamp * 1000);
   return Number.isNaN(date.getTime()) ? null : date.toISOString().slice(0, length);
@@ -226,4 +244,4 @@ function rowTimestamp(row: RawPayloadRow): number {
 const MushmomStatsLoader = { loadStatsHistory, loadInitialStatsHistory, loadArchiveStatsHistory, selectArchiveChunks, oldestPayloadTimestamp };
 window.MushmomStatsLoader = MushmomStatsLoader;
 
-export { MushmomStatsLoader, loadStatsHistory, loadInitialStatsHistory, loadArchiveStatsHistory, selectArchiveChunks, oldestPayloadTimestamp, rowTimestamp, validateManifest, validateChunk };
+export { MushmomStatsLoader, loadStatsHistory, loadInitialStatsHistory, loadArchiveStatsHistory, selectArchiveChunks, oldestPayloadTimestamp, rowTimestamp, validateManifest, validateManifestPartition, validateChunk };

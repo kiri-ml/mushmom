@@ -371,9 +371,30 @@ describe("stats archive generator", () => {
     expect(fs.readFileSync(path.join(outputDir, "manifests.json"))).toEqual(first);
     expect(fs.existsSync(path.join(outputDir, "stale-v1.json"))).toBe(false);
     expect(manifest.chunks.map((chunk) => [chunk.period, chunk.granularity])).toEqual([
-      ["2026-06", "month"], ["2025-01", "month"], ["2024", "year"],
+      ["2026-06", "month"], ["2025", "year"], ["2024", "year"],
     ]);
     expect(manifest.chunks.every((chunk) => /^\d{4}(?:-\d{2})?\.[A-Za-z0-9_-]{8}\.json$/.test(chunk.file))).toBe(true);
+  });
+
+  it("keeps the previous year monthly only through a January archive horizon", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mushmom-yearly-february-"));
+    const generator = require(path.join(repoRoot, "scripts/generate_stats_archive.cjs")) as StatsArchiveGenerator;
+    const legacyPayload = { data: [
+      { timestamp: "2025-12-31T00:00:00Z", usercount: 9 },
+    ] };
+    const previousYearRows: Array<[number, number]> = [[1782864000, 1], [1798675200, 2]];
+
+    const january = generator.generateArchive(legacyPayload, path.join(tempDir, "jan"), [...previousYearRows, [1798761600, 3], [1801440000, 4]]).manifest;
+    expect(january.archiveThroughPeriod).toBe("2027-01");
+    expect(january.chunks.map((chunk) => [chunk.period, chunk.granularity])).toEqual([
+      ["2027-01", "month"], ["2026-12", "month"], ["2026-07", "month"], ["2025", "year"],
+    ]);
+
+    const february = generator.generateArchive(legacyPayload, path.join(tempDir, "feb"), [...previousYearRows, [1798761600, 3], [1803859200, 4]]).manifest;
+    expect(february.archiveThroughPeriod).toBe("2027-02");
+    expect(february.chunks.map((chunk) => [chunk.period, chunk.granularity])).toEqual([
+      ["2027-01", "month"], ["2026", "year"], ["2025", "year"],
+    ]);
   });
 
   it("validates monthly filenames, month agreement, and ascending rows", () => {
@@ -657,5 +678,26 @@ describe("stats loader schema v2", () => {
       fetcher: async (url: string) => url.startsWith("/api/") ? [] : { period: newest.period, data: [[1782863104, 10]] },
       normalizePayload: normalize,
     })).rejects.toThrow("schemaVersion 2");
+  });
+
+  it("enforces yearly-in-February archive partitioning outside runtime manifest validation", async () => {
+    const { module } = await loadStatsModule();
+    const januaryPreviousYearMonth = makeChunk("2025-12", 1767139200);
+    const februaryPreviousYear = makeChunk("2025", 1735689600);
+    const staleFebruaryMonth = makeChunk("2025-12", 1767139200);
+
+    expect(module.validateManifestPartition(makeManifest([januaryPreviousYearMonth], "2026-01")).chunks[0]?.period).toBe("2025-12");
+    expect(module.validateManifestPartition(makeManifest([februaryPreviousYear], "2026-02")).chunks[0]?.period).toBe("2025");
+    expect(module.validateManifest(makeManifest([staleFebruaryMonth], "2026-02")).chunks[0]?.period).toBe("2025-12");
+    expect(() => module.validateManifestPartition(makeManifest([staleFebruaryMonth], "2026-02"))).toThrow("invalid partitioning");
+  });
+
+  it("validates checked-in stats archive manifests before deploy", async () => {
+    const { module } = await loadStatsModule();
+    const publicManifest = JSON.parse(fs.readFileSync(path.join(repoRoot, "public/assets/stats/manifests.json"), "utf8"));
+    const bundledManifest = JSON.parse(fs.readFileSync(path.join(repoRoot, "src/assets/stats/manifests.json"), "utf8"));
+
+    expect(module.validateManifestPartition(publicManifest).chunks.map((chunk) => chunk.period)).toEqual(statsManifest.chunks.map((chunk) => chunk.period));
+    expect(module.validateManifestPartition(bundledManifest).chunks.map((chunk) => chunk.period)).toEqual(statsManifest.chunks.map((chunk) => chunk.period));
   });
 });

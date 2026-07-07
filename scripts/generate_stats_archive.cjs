@@ -110,15 +110,12 @@ function mergeRows(...sources) {
 function buildChunks(rows, archiveThroughPeriod) {
   const horizon = parseMonthKey(archiveThroughPeriod);
   if (!horizon) throw new Error(`Invalid archive horizon: ${archiveThroughPeriod}`);
-  const rollingStart = new Date(Date.UTC(horizon.year, horizon.month - 12, 1));
-  const monthlyStartYear = rollingStart.getUTCFullYear();
   const groups = new Map();
 
   for (const row of rows) {
     const period = monthNameForTimestamp(row[0]);
     if (period > archiveThroughPeriod) continue;
-    const year = Number(period.slice(0, 4));
-    const key = year < monthlyStartYear ? String(year) : period;
+    const key = isMonthlyArchivePeriod(period, horizon) ? period : period.slice(0, 4);
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(row);
   }
@@ -130,6 +127,13 @@ function buildChunks(rows, archiveThroughPeriod) {
       rows: chunkRows.sort((a, b) => a[0] - b[0]),
     }))
     .sort((a, b) => b.period.localeCompare(a.period));
+}
+
+function isMonthlyArchivePeriod(period, horizon) {
+  const parsed = parseMonthKey(period);
+  if (!parsed) return false;
+  if (parsed.year === horizon.year) return parsed.month <= horizon.month;
+  return horizon.month === 1 && parsed.year === horizon.year - 1;
 }
 
 function readJsonlDirectory(jsonlDir) {

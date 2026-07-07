@@ -57,11 +57,15 @@ the fixed cutover and deterministically sets `archiveThroughPeriod` to
 
 ### Partitioning
 
-The rolling window is the 12 completed months ending at
-`archiveThroughPeriod`. Monthly chunks start in January of the earliest year
-intersected by that window and continue through `archiveThroughPeriod`. All
-earlier observations are grouped into non-overlapping annual chunks. Periods
-without observations do not produce empty chunk files.
+Monthly chunks cover observed months in the same calendar year as
+`archiveThroughPeriod`, from January through `archiveThroughPeriod`. If
+`archiveThroughPeriod` is January, observed months from the full previous
+calendar year also remain monthly so the latest previous-year December can be
+loaded without fetching a full annual chunk.
+
+All earlier observations are grouped into non-overlapping complete annual
+chunks. Annual chunks MUST NOT represent partial calendar years. Periods without
+observations do not produce empty chunk files.
 
 ## Chunk
 
