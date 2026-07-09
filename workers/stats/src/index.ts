@@ -34,6 +34,12 @@ type SyncResult = {
   data: StatsRow;
 };
 
+type UpdatePointResult = {
+  bucket: number;
+  key: string;
+  data: StatsRow;
+};
+
 class SyncError extends Error {
   constructor(
     message: string,
@@ -137,6 +143,30 @@ function validateUsercount(payload: unknown): number {
   return usercount;
 }
 
+function validateUpdatePointPayload(payload: unknown): { timestamp: number; usercount: number } {
+  const timestamp = payload && typeof payload === "object"
+    ? (payload as { timestamp?: unknown }).timestamp
+    : undefined;
+  const usercount = payload && typeof payload === "object"
+    ? (payload as { usercount?: unknown }).usercount
+    : undefined;
+
+  if (typeof timestamp !== "number"
+    || !Number.isFinite(timestamp)
+    || !Number.isInteger(timestamp)
+    || timestamp < 0) {
+    throw new SyncError("Request timestamp must be a finite non-negative integer UTC epoch second.", 400);
+  }
+  if (typeof usercount !== "number"
+    || !Number.isFinite(usercount)
+    || !Number.isInteger(usercount)
+    || usercount < 0) {
+    throw new SyncError("Request usercount must be a finite non-negative integer.", 400);
+  }
+
+  return { timestamp, usercount };
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -232,6 +262,42 @@ export async function syncStats(env: Env, options: SyncOptions = {}): Promise<Sy
   return result;
 }
 
+export async function updateStatsPoint(env: Env, timestamp: number, usercount: number): Promise<UpdatePointResult> {
+  const interval = readInterval(env);
+  const bucket = bucketTimestamp(timestamp, interval);
+  const data: StatsRow = [bucket, usercount];
+  if (!isStatsRow(data)) throw new SyncError("Request usercount must be a finite non-negative integer.", 400);
+
+  const key = monthlyKey(bucket);
+  let existing: R2ObjectBodyLike | null;
+  try {
+    existing = await env.STATS_BUCKET.get(key);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "unknown R2 error";
+    throw new SyncError(`Failed to read ${key}: ${detail}`, 500);
+  }
+
+  let rows: StatsRow[];
+  try {
+    rows = parseJsonl(existing ? await existing.text() : "");
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "invalid JSONL";
+    throw new SyncError(`Failed to parse existing ${key}: ${detail}`, 500);
+  }
+
+  const updatedRows = upsertRow(rows, data);
+  try {
+    await env.STATS_BUCKET.put(key, serializeJsonl(updatedRows), {
+      httpMetadata: { contentType: "application/x-ndjson; charset=utf-8" },
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "unknown R2 error";
+    throw new SyncError(`Failed to write stats to R2: ${detail}`, 500);
+  }
+
+  return { bucket, key, data };
+}
+
 function json(body: unknown, status = 200, extraHeaders: HeadersInit = {}): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -243,20 +309,38 @@ function json(body: unknown, status = 200, extraHeaders: HeadersInit = {}): Resp
   });
 }
 
+async function readJsonRequest(request: Request): Promise<unknown> {
+  try {
+    return await request.json() as unknown;
+  } catch {
+    throw new SyncError("Request body must be valid JSON.", 400);
+  }
+}
+
+function requireAdmin(env: Env, request: Request): Response | null {
+  if (!env.ADMIN_TOKEN) {
+    return json({ error: "ADMIN_TOKEN is not configured." }, 500);
+  }
+  if (request.headers.get("authorization") !== `Bearer ${env.ADMIN_TOKEN}`) {
+    return json({ error: "Unauthorized." }, 401, { "www-authenticate": "Bearer" });
+  }
+  return null;
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    if (url.pathname !== "/admin/sync") return json({ error: "Not found." }, 404);
+    if (url.pathname !== "/admin/sync" && url.pathname !== "/admin/point") return json({ error: "Not found." }, 404);
     if (request.method !== "POST") return json({ error: "Method not allowed." }, 405, { allow: "POST" });
 
-    if (!env.ADMIN_TOKEN) {
-      return json({ error: "ADMIN_TOKEN is not configured." }, 500);
-    }
-    if (request.headers.get("authorization") !== `Bearer ${env.ADMIN_TOKEN}`) {
-      return json({ error: "Unauthorized." }, 401, { "www-authenticate": "Bearer" });
-    }
+    const authError = requireAdmin(env, request);
+    if (authError) return authError;
 
     try {
+      if (url.pathname === "/admin/point") {
+        const payload = validateUpdatePointPayload(await readJsonRequest(request));
+        return json(await updateStatsPoint(env, payload.timestamp, payload.usercount));
+      }
       return json(await syncStats(env));
     } catch (error) {
       if (error instanceof SyncError) return json({ error: error.message }, error.status);

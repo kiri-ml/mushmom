@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   bucketTimestamp,
+  default as worker,
   isStatsRow,
   monthlyKey,
   parseJsonl,
   serializeJsonl,
   syncStats,
+  updateStatsPoint,
   upsertRow,
   type Env,
   type StatsRow,
@@ -256,6 +258,71 @@ describe("stats sync validation", () => {
       now: new Date("2026-07-03T00:01:00.000Z"),
       fetcher: responseWith({ usercount: 12 }),
     })).rejects.toThrow("Failed to parse existing");
+    expect(bucket.puts).toEqual([]);
+  });
+});
+
+describe("manual stats point updates", () => {
+  it("updates the monthly object row for the bucket containing the timestamp", async () => {
+    const bucket = new FakeBucket();
+    bucket.objects.set("stats/jsonl/2026-07.jsonl", "[1783036500,8]\n[1783036800,5]\n[1783037100,12]\n");
+
+    const result = await updateStatsPoint(createEnv(bucket), 1_783_036_979, 42);
+
+    expect(result).toEqual({
+      bucket: 1_783_036_800,
+      key: "stats/jsonl/2026-07.jsonl",
+      data: [1_783_036_800, 42],
+    });
+    expect(bucket.gets).toEqual(["stats/jsonl/2026-07.jsonl"]);
+    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe(
+      "[1783036500,8]\n[1783036800,42]\n[1783037100,12]\n",
+    );
+  });
+
+  it("creates the monthly object when the timestamp belongs to a missing object", async () => {
+    const bucket = new FakeBucket();
+
+    await updateStatsPoint(createEnv(bucket), 1_783_036_979, 42);
+
+    expect(bucket.gets).toEqual(["stats/jsonl/2026-07.jsonl"]);
+    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe("[1783036800,42]\n");
+  });
+
+  it("exposes an authenticated POST API for manual point updates", async () => {
+    const bucket = new FakeBucket();
+    const env = createEnv(bucket);
+    const response = await worker.fetch(new Request("https://stats.example/admin/point", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer secret",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ timestamp: 1_783_036_979, usercount: 42 }),
+    }), env);
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      bucket: 1_783_036_800,
+      key: "stats/jsonl/2026-07.jsonl",
+      data: [1_783_036_800, 42],
+    });
+    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe("[1783036800,42]\n");
+  });
+
+  it("rejects invalid manual update payloads without writing", async () => {
+    const bucket = new FakeBucket();
+    const env = createEnv(bucket);
+    const response = await worker.fetch(new Request("https://stats.example/admin/point", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer secret",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ timestamp: 1_783_036_979, usercount: 1.5 }),
+    }), env);
+
+    expect(response.status).toBe(400);
     expect(bucket.puts).toEqual([]);
   });
 });
