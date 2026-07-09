@@ -514,9 +514,9 @@ function buildTimelineOptions(points: StatsPoint[]) {
     series: bucketed ? [
       { id: "range-base", type: "line", stack: "population-range", data: rangeBaseData, symbol: "none", lineStyle: { opacity: 0 }, itemStyle: { opacity: 0 }, areaStyle: { opacity: 0 }, silent: true, tooltip: { show: false } },
       { id: "range-spread", name: tr("chart.series.playerRange"), type: "line", stack: "population-range", data: rangeSpreadData, symbol: "none", lineStyle: { opacity: 0 }, areaStyle: { color: "rgba(125, 216, 125, 0.16)" }, silent: true, tooltip: { show: false } },
-      { id: "bucket-average", name: getSeriesLabel(config), type: "line", smooth: true, showSymbol: buckets.length < 80, symbolSize: 7, lineStyle: { width: 3, color: "#7dd87d" }, itemStyle: { color: "#f1c44f" }, data: averageData, z: 3 },
+      { id: "bucket-average", name: getSeriesLabel(config), type: "line", smooth: false, showSymbol: buckets.length < 80, symbolSize: 7, lineStyle: { width: 3, color: "#7dd87d" }, itemStyle: { color: "#f1c44f" }, data: averageData, z: 3 },
     ] : [
-      { name: getSeriesLabel(config), type: "line", smooth: true, showSymbol: visible.length < 80, symbolSize: 7, lineStyle: { width: 3, color: "#7dd87d" }, itemStyle: { color: "#f1c44f" }, areaStyle: { color: { type: "linear", x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: "rgba(125, 216, 125, 0.36)" }, { offset: 1, color: "rgba(125, 216, 125, 0.02)" }] } }, data: values },
+      { name: getSeriesLabel(config), type: "line", smooth: false, showSymbol: visible.length < 80, symbolSize: 7, lineStyle: { width: 3, color: "#7dd87d" }, itemStyle: { color: "#f1c44f" }, areaStyle: { color: { type: "linear", x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: "rgba(125, 216, 125, 0.36)" }, { offset: 1, color: "rgba(125, 216, 125, 0.02)" }] } }, data: values },
     ],
     graphic: bucketed ? (buckets.length === 0 ? emptyGraphic() : null) : (values.length === 0 ? emptyGraphic() : null),
   };
