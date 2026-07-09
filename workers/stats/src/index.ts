@@ -1,5 +1,7 @@
 export type StatsRow = [epochSeconds: number, usercount: number];
 
+const USERCOUNT_RETRY_DELAY_MS = 5_000;
+
 type R2ObjectBodyLike = {
   text(): Promise<string>;
 };
@@ -23,6 +25,7 @@ export type Env = {
 type SyncOptions = {
   now?: Date;
   fetcher?: typeof fetch;
+  retryDelayMs?: number;
 };
 
 type SyncResult = {
@@ -134,20 +137,14 @@ function validateUsercount(payload: unknown): number {
   return usercount;
 }
 
-export async function syncStats(env: Env, options: SyncOptions = {}): Promise<SyncResult> {
-  if (!env.CURRENT_USERS_URL) {
-    throw new SyncError("CURRENT_USERS_URL is not configured.", 500);
-  }
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
-  const now = options.now ?? new Date();
-  const fetchedAt = now.toISOString();
-  const interval = readInterval(env);
-  const bucket = bucketTimestamp(Math.floor(now.getTime() / 1000), interval);
-  const fetcher = options.fetcher ?? fetch;
-
+async function fetchCurrentUsercount(url: string, fetcher: typeof fetch): Promise<number> {
   let response: Response;
   try {
-    response = await fetcher(env.CURRENT_USERS_URL, {
+    response = await fetcher(url, {
       headers: { accept: "application/json" },
     });
   } catch (error) {
@@ -165,7 +162,43 @@ export async function syncStats(env: Env, options: SyncOptions = {}): Promise<Sy
   } catch {
     throw new SyncError("Current-users API returned invalid JSON.", 502);
   }
-  const data: StatsRow = [bucket, validateUsercount(payload)];
+
+  return validateUsercount(payload);
+}
+
+async function readCurrentUsercount(url: string, fetcher: typeof fetch, retryDelayMs: number): Promise<number> {
+  let firstUsercount: number;
+  try {
+    firstUsercount = await fetchCurrentUsercount(url, fetcher);
+  } catch {
+    if (retryDelayMs > 0) await sleep(retryDelayMs);
+    return fetchCurrentUsercount(url, fetcher);
+  }
+
+  if (firstUsercount !== 0) return firstUsercount;
+
+  try {
+    if (retryDelayMs > 0) await sleep(retryDelayMs);
+    return await fetchCurrentUsercount(url, fetcher);
+  } catch {
+    return firstUsercount;
+  }
+}
+
+export async function syncStats(env: Env, options: SyncOptions = {}): Promise<SyncResult> {
+  if (!env.CURRENT_USERS_URL) {
+    throw new SyncError("CURRENT_USERS_URL is not configured.", 500);
+  }
+
+  const now = options.now ?? new Date();
+  const fetchedAt = now.toISOString();
+  const interval = readInterval(env);
+  const bucket = bucketTimestamp(Math.floor(now.getTime() / 1000), interval);
+  const fetcher = options.fetcher ?? fetch;
+  const retryDelayMs = options.retryDelayMs ?? USERCOUNT_RETRY_DELAY_MS;
+
+  const usercount = await readCurrentUsercount(env.CURRENT_USERS_URL, fetcher, retryDelayMs);
+  const data: StatsRow = [bucket, usercount];
 
   const key = monthlyKey(bucket);
   let existing: R2ObjectBodyLike | null;

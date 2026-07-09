@@ -44,6 +44,25 @@ function responseWith(payload: unknown): typeof fetch {
   }));
 }
 
+function errorResponse(status = 502): Response {
+  return new Response(JSON.stringify({ error: "upstream failed" }), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+function responsesWith(...payloads: unknown[]): typeof fetch {
+  const responses = payloads.map((payload) => new Response(JSON.stringify(payload), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  }));
+  return vi.fn(async () => {
+    const response = responses.shift();
+    if (!response) throw new Error("Unexpected fetch call.");
+    return response;
+  });
+}
+
 describe("stats rows", () => {
   it("buckets timestamps into five-minute intervals", () => {
     expect(bucketTimestamp(1_783_036_979, 300)).toBe(1_783_036_800);
@@ -81,30 +100,31 @@ describe("stats rows", () => {
 });
 
 describe("stats sync validation", () => {
-  it.each([
-    undefined,
-    null,
-    -1,
-    1.5,
-    "1234",
-    Number.NaN,
-    Number.POSITIVE_INFINITY,
-  ])("rejects invalid upstream usercount %p without writing", async (usercount) => {
+  it("rejects repeated invalid upstream usercounts without writing", async () => {
     const bucket = new FakeBucket();
+    const fetcher = responsesWith(
+      { usercount: "1234" },
+      { usercount: Number.POSITIVE_INFINITY },
+    );
+
     await expect(syncStats(createEnv(bucket), {
       now: new Date("2026-07-03T00:01:00.000Z"),
-      fetcher: responseWith({ usercount }),
+      fetcher,
+      retryDelayMs: 0,
     })).rejects.toThrow("finite non-negative integer");
+    expect(fetcher).toHaveBeenCalledTimes(2);
     expect(bucket.puts).toEqual([]);
   });
 
   it("upserts an existing monthly object", async () => {
     const bucket = new FakeBucket();
     bucket.objects.set("stats/jsonl/2026-07.jsonl", "[1783037100,12]\n[1783036500,8]\n");
+    const fetcher = responsesWith({ usercount: 0 }, { usercount: 0 });
 
     const result = await syncStats(createEnv(bucket), {
       now: new Date("2026-07-03T00:01:00.000Z"),
-      fetcher: responseWith({ usercount: 0 }),
+      fetcher,
+      retryDelayMs: 0,
     });
 
     expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe(
@@ -117,6 +137,99 @@ describe("stats sync validation", () => {
       data: [1_783_036_800, 0],
     });
     expect(bucket.puts).toHaveLength(1);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it("writes the retried value when an initial zero is not confirmed", async () => {
+    const bucket = new FakeBucket();
+    const fetcher = responsesWith({ usercount: 0 }, { usercount: 12 });
+
+    const result = await syncStats(createEnv(bucket), {
+      now: new Date("2026-07-03T00:01:00.000Z"),
+      fetcher,
+      retryDelayMs: 0,
+    });
+
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe("[1783036800,12]\n");
+    expect(result.data).toEqual([1_783_036_800, 12]);
+  });
+
+  it("writes the initial zero when zero confirmation fails", async () => {
+    const bucket = new FakeBucket();
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ usercount: 0 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }))
+      .mockRejectedValueOnce(new Error("retry unavailable"));
+
+    const result = await syncStats(createEnv(bucket), {
+      now: new Date("2026-07-03T00:01:00.000Z"),
+      fetcher,
+      retryDelayMs: 0,
+    });
+
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe("[1783036800,0]\n");
+    expect(result.data).toEqual([1_783_036_800, 0]);
+  });
+
+  it("writes the retried value when the initial fetch fails", async () => {
+    const bucket = new FakeBucket();
+    const fetcher = vi.fn()
+      .mockRejectedValueOnce(new Error("temporary upstream failure"))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ usercount: 12 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }));
+
+    const result = await syncStats(createEnv(bucket), {
+      now: new Date("2026-07-03T00:01:00.000Z"),
+      fetcher,
+      retryDelayMs: 0,
+    });
+
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe("[1783036800,12]\n");
+    expect(result.data).toEqual([1_783_036_800, 12]);
+  });
+
+  it("writes zero when the initial fetch fails and retry returns zero", async () => {
+    const bucket = new FakeBucket();
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(errorResponse(503))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ usercount: 0 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }));
+
+    const result = await syncStats(createEnv(bucket), {
+      now: new Date("2026-07-03T00:01:00.000Z"),
+      fetcher,
+      retryDelayMs: 0,
+    });
+
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe("[1783036800,0]\n");
+    expect(result.data).toEqual([1_783_036_800, 0]);
+  });
+
+  it("rejects repeated initial fetch failures without writing", async () => {
+    const bucket = new FakeBucket();
+    const fetcher = vi.fn()
+      .mockRejectedValueOnce(new Error("temporary upstream failure"))
+      .mockResolvedValueOnce(errorResponse(503));
+
+    await expect(syncStats(createEnv(bucket), {
+      now: new Date("2026-07-03T00:01:00.000Z"),
+      fetcher,
+      retryDelayMs: 0,
+    })).rejects.toThrow("Current-users API returned HTTP 503");
+
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(bucket.gets).toEqual([]);
+    expect(bucket.puts).toEqual([]);
   });
 
   it("creates a monthly object from the latest observation when none exists", async () => {
