@@ -454,14 +454,17 @@ describe("app behavior", () => {
       { date: new Date(Date.UTC(2026, 3, 24, 13, 0, 0)), count: 1250 },
     ];
     module.testApi.setCurrentRangeForTest("7d");
-    expect(module.buildTimelineOptions(points).series[0]?.type).toBe("line");
+    const rawSeries = module.buildTimelineOptions(points).series as Array<{ smooth?: boolean; type?: string }>;
+    expect(rawSeries[0]?.type).toBe("line");
+    expect(rawSeries[0]?.smooth).toBe(false);
     module.testApi.setCurrentRangeForTest("28d");
     const bucketedOptions = module.buildTimelineOptions(points);
-    const bucketedSeries = bucketedOptions.series as Array<{ id?: string; type?: string }>;
+    const bucketedSeries = bucketedOptions.series as Array<{ id?: string; smooth?: boolean; type?: string }>;
     expect(bucketedSeries.map((series) => series.type)).toEqual(["line", "line", "line"]);
     expect(bucketedSeries[0]?.id).toBe("range-base");
     expect(bucketedSeries[1]?.id).toBe("range-spread");
     expect(bucketedSeries[2]?.id).toBe("bucket-average");
+    expect(bucketedSeries[2]?.smooth).toBe(true);
   });
 
   it("uses compact bucket ranges in bucket tooltips", async () => {
