@@ -30,6 +30,14 @@ It also accepts compact array rows such as:
 
 Epoch-second rows are also supported.
 
+New observations include the upstream unique-user count as a third value:
+
+```json
+[1782864000, 2054, 1031]
+```
+
+Legacy two-value rows remain supported and may coexist with three-value rows.
+
 ## Project Layout
 
 - `index.html` - Vite HTML entry
@@ -111,9 +119,9 @@ Cloudflare Pages should use:
 
 Monthly R2 stats are available from `GET /api/stats/YYYY-MM`. The month must use
 the zero-padded UTC format, for example `/api/stats/2026-07`. Successful
-responses are JSON arrays of `[epochSeconds, usercount]` rows in ascending
-order. Each month is stored as `stats/jsonl/YYYY-MM.jsonl`; a month with no
-object returns `[]`.
+responses are JSON arrays of legacy `[epochSeconds, usercount]` or new
+`[epochSeconds, usercount, uniquecount]` rows in ascending order. Each month is
+stored as `stats/jsonl/YYYY-MM.jsonl`; a month with no object returns `[]`.
 
 The stats Worker upserts each scheduled observation into the current monthly
 object. If the object does not exist, the Worker creates it from that

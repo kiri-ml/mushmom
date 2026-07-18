@@ -5,7 +5,8 @@ const CLOSED_MONTH_CACHE_CONTROL =
   "public, max-age=31536000, s-maxage=31536000, immutable";
 const MONTH_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
 
-export type StatsRow = [epochSeconds: number, usercount: number];
+export type StatsRow = [epochSeconds: number, usercount: number]
+  | [epochSeconds: number, usercount: number, uniquecount: number];
 
 type R2ObjectBodyLike = {
   text(): Promise<string>;
@@ -90,7 +91,7 @@ function parseR2Jsonl(text: string, key: string): StatsRow[] {
     }
 
     if (!isStatsRow(row)) {
-      throw new Error(`Invalid R2 JSONL in ${key} at line ${index + 1}: expected [epochSeconds, usercount].`);
+      throw new Error(`Invalid R2 JSONL in ${key} at line ${index + 1}: expected a two- or three-value stats row.`);
     }
     return row;
   });
@@ -98,11 +99,14 @@ function parseR2Jsonl(text: string, key: string): StatsRow[] {
 
 function isStatsRow(row: unknown): row is StatsRow {
   return Array.isArray(row)
-    && row.length === 2
-    && Number.isInteger(row[0])
-    && row[0] >= 0
-    && Number.isInteger(row[1])
-    && row[1] >= 0;
+    && (row.length === 2 || row.length === 3)
+    && isNonnegativeInteger(row[0])
+    && isNonnegativeInteger(row[1])
+    && (row.length === 2 || isNonnegativeInteger(row[2]));
+}
+
+function isNonnegativeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) >= 0;
 }
 
 function cacheControlForMonth(month: string, now = new Date()): string {

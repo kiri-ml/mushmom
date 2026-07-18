@@ -11,7 +11,7 @@ Schema v2 defines deterministic manifests and archive chunks for the
   "dataset": "maplelegends-online-users",
   "archiveThroughPeriod": "2026-12",
   "format": {
-    "rowShape": ["epochSeconds", "usercount"],
+    "rowShape": ["epochSeconds", "usercount", "uniquecount?"],
     "timestampUnit": "seconds",
     "order": "ascending"
   },
@@ -34,7 +34,9 @@ Schema v2 defines deterministic manifests and archive chunks for the
 - `dataset` MUST equal `maplelegends-online-users`.
 - `archiveThroughPeriod` is the latest completed UTC month represented by the
   archive, including a month with no observations. It MUST use `YYYY-MM`.
-- `format.rowShape` MUST equal `["epochSeconds", "usercount"]`.
+- `format.rowShape` MUST equal `["epochSeconds", "usercount"]` for an
+  existing legacy manifest or `["epochSeconds", "usercount", "uniquecount?"]`
+  for a newly generated manifest.
 - `format.timestampUnit` MUST equal `seconds`.
 - `format.order` MUST equal `ascending`.
 - `chunks` MUST be ordered newest-first and MUST NOT overlap.
@@ -75,7 +77,7 @@ observations do not produce empty chunk files.
   "period": "2026-12",
   "data": [
     [1796083210, 1234],
-    [1796083510, 1250]
+    [1796083510, 1250, 642]
   ]
 }
 ```
@@ -84,8 +86,10 @@ observations do not produce empty chunk files.
 
 - `schemaVersion` MUST equal `2`.
 - `period` MUST match its manifest entry.
-- Each row MUST contain exactly two nonnegative integers: an epoch timestamp in
-  UTC seconds and a user count.
+- Each row MUST contain two or three nonnegative integers: an epoch timestamp
+  in UTC seconds, a user count, and an optional unique-user count. Two- and
+  three-value rows MAY coexist in the same chunk. A missing unique-user count
+  means unavailable and MUST NOT imply zero.
 - Timestamps MUST be unique and strictly ascending.
 - Missing timestamps represent missing observations and MUST NOT imply a zero
   user count.

@@ -121,8 +121,12 @@ function validateManifest(value: unknown): StatsManifest {
   const archiveThroughPeriod = value.archiveThroughPeriod;
   if (!isRecord(value.format)) throw new Error("Stats manifest has an invalid format.");
   requireExactKeys(value.format, FORMAT_KEYS, "Stats manifest format");
-  if (!Array.isArray(value.format.rowShape) || value.format.rowShape.length !== 2
-    || value.format.rowShape[0] !== "epochSeconds" || value.format.rowShape[1] !== "usercount"
+  const rowShape = value.format.rowShape;
+  const validRowShape = Array.isArray(rowShape)
+    && rowShape[0] === "epochSeconds"
+    && rowShape[1] === "usercount"
+    && (rowShape.length === 2 || (rowShape.length === 3 && rowShape[2] === "uniquecount?"));
+  if (!validRowShape
     || value.format.timestampUnit !== "seconds" || value.format.order !== "ascending") {
     throw new Error("Stats manifest has an invalid format.");
   }
@@ -179,7 +183,7 @@ function validateChunk(value: unknown, entry: StatsManifestChunk): StatsPayload 
   }
   let previous = -1;
   for (const row of value.data) {
-    if (!Array.isArray(row) || row.length !== 2 || !isNonnegativeInteger(row[0]) || !isNonnegativeInteger(row[1]) || row[0] <= previous) {
+    if (!isStatsTuple(row) || row[0] <= previous) {
       throw new Error(`Stats chunk ${entry.file} contains invalid or unordered rows.`);
     }
     const rowPeriod = periodForTimestamp(row[0], entry.granularity === "year" ? 4 : 7);
@@ -204,6 +208,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function isNonnegativeInteger(value: unknown): value is number { return Number.isSafeInteger(value) && Number(value) >= 0; }
+function isStatsTuple(value: unknown): value is [number, number] | [number, number, number] {
+  return Array.isArray(value)
+    && (value.length === 2 || value.length === 3)
+    && isNonnegativeInteger(value[0])
+    && isNonnegativeInteger(value[1])
+    && (value.length === 2 || isNonnegativeInteger(value[2]));
+}
 function parseMonthKey(month: string): { year: number; month: number } | null {
   if (!isMonthKey(month)) return null;
   return { year: Number(month.slice(0, 4)), month: Number(month.slice(5, 7)) };

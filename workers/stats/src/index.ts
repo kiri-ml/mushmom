@@ -1,4 +1,5 @@
-export type StatsRow = [epochSeconds: number, usercount: number];
+export type StatsRow = [epochSeconds: number, usercount: number]
+  | [epochSeconds: number, usercount: number, uniquecount: number];
 
 const USERCOUNT_RETRY_DELAY_MS = 5_000;
 
@@ -71,13 +72,10 @@ export function monthlyKey(bucket: number): string {
 
 export function isStatsRow(value: unknown): value is StatsRow {
   return Array.isArray(value)
-    && value.length === 2
-    && Number.isFinite(value[0])
-    && Number.isInteger(value[0])
-    && value[0] >= 0
-    && Number.isFinite(value[1])
-    && Number.isInteger(value[1])
-    && value[1] >= 0;
+    && (value.length === 2 || value.length === 3)
+    && isNonnegativeInteger(value[0])
+    && isNonnegativeInteger(value[1])
+    && (value.length === 2 || isNonnegativeInteger(value[2]));
 }
 
 export function parseJsonl(text: string): StatsRow[] {
@@ -93,7 +91,7 @@ export function parseJsonl(text: string): StatsRow[] {
     }
 
     if (!isStatsRow(value)) {
-      throw new Error(`Invalid stats JSONL at line ${index + 1}: expected [epochSeconds, usercount].`);
+      throw new Error(`Invalid stats JSONL at line ${index + 1}: expected [epochSeconds, usercount] or [epochSeconds, usercount, uniquecount].`);
     }
     return value;
   });
@@ -129,49 +127,58 @@ function readInterval(env: Env): number {
   return interval;
 }
 
-function validateUsercount(payload: unknown): number {
+function isNonnegativeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) >= 0;
+}
+
+type UserCounts = { usercount: number; uniquecount: number };
+
+function validateUsercounts(payload: unknown): UserCounts {
   const usercount = payload && typeof payload === "object"
     ? (payload as { usercount?: unknown }).usercount
     : undefined;
+  const uniquecount = payload && typeof payload === "object"
+    ? (payload as { uniquecount?: unknown }).uniquecount
+    : undefined;
 
-  if (typeof usercount !== "number"
-    || !Number.isFinite(usercount)
-    || !Number.isInteger(usercount)
-    || usercount < 0) {
+  if (!isNonnegativeInteger(usercount)) {
     throw new SyncError("Upstream response usercount must be a finite non-negative integer.", 502);
   }
-  return usercount;
+  if (!isNonnegativeInteger(uniquecount)) {
+    throw new SyncError("Upstream response uniquecount must be a finite non-negative integer.", 502);
+  }
+  return { usercount, uniquecount };
 }
 
-function validateUpdatePointPayload(payload: unknown): { timestamp: number; usercount: number } {
+function validateUpdatePointPayload(payload: unknown): { timestamp: number; usercount: number; uniquecount: number } {
   const timestamp = payload && typeof payload === "object"
     ? (payload as { timestamp?: unknown }).timestamp
     : undefined;
   const usercount = payload && typeof payload === "object"
     ? (payload as { usercount?: unknown }).usercount
     : undefined;
+  const uniquecount = payload && typeof payload === "object"
+    ? (payload as { uniquecount?: unknown }).uniquecount
+    : undefined;
 
-  if (typeof timestamp !== "number"
-    || !Number.isFinite(timestamp)
-    || !Number.isInteger(timestamp)
-    || timestamp < 0) {
+  if (!isNonnegativeInteger(timestamp)) {
     throw new SyncError("Request timestamp must be a finite non-negative integer UTC epoch second.", 400);
   }
-  if (typeof usercount !== "number"
-    || !Number.isFinite(usercount)
-    || !Number.isInteger(usercount)
-    || usercount < 0) {
+  if (!isNonnegativeInteger(usercount)) {
     throw new SyncError("Request usercount must be a finite non-negative integer.", 400);
   }
+  if (!isNonnegativeInteger(uniquecount)) {
+    throw new SyncError("Request uniquecount must be a finite non-negative integer.", 400);
+  }
 
-  return { timestamp, usercount };
+  return { timestamp, usercount, uniquecount };
 }
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function fetchCurrentUsercount(url: string, fetcher: typeof fetch): Promise<number> {
+async function fetchCurrentUsercounts(url: string, fetcher: typeof fetch): Promise<UserCounts> {
   let response: Response;
   try {
     response = await fetcher(url, {
@@ -193,25 +200,25 @@ async function fetchCurrentUsercount(url: string, fetcher: typeof fetch): Promis
     throw new SyncError("Current-users API returned invalid JSON.", 502);
   }
 
-  return validateUsercount(payload);
+  return validateUsercounts(payload);
 }
 
-async function readCurrentUsercount(url: string, fetcher: typeof fetch, retryDelayMs: number): Promise<number> {
-  let firstUsercount: number;
+async function readCurrentUsercounts(url: string, fetcher: typeof fetch, retryDelayMs: number): Promise<UserCounts> {
+  let firstCounts: UserCounts;
   try {
-    firstUsercount = await fetchCurrentUsercount(url, fetcher);
+    firstCounts = await fetchCurrentUsercounts(url, fetcher);
   } catch {
     if (retryDelayMs > 0) await sleep(retryDelayMs);
-    return fetchCurrentUsercount(url, fetcher);
+    return fetchCurrentUsercounts(url, fetcher);
   }
 
-  if (firstUsercount !== 0) return firstUsercount;
+  if (firstCounts.usercount !== 0) return firstCounts;
 
   try {
     if (retryDelayMs > 0) await sleep(retryDelayMs);
-    return await fetchCurrentUsercount(url, fetcher);
+    return await fetchCurrentUsercounts(url, fetcher);
   } catch {
-    return firstUsercount;
+    return firstCounts;
   }
 }
 
@@ -227,8 +234,8 @@ export async function syncStats(env: Env, options: SyncOptions = {}): Promise<Sy
   const fetcher = options.fetcher ?? fetch;
   const retryDelayMs = options.retryDelayMs ?? USERCOUNT_RETRY_DELAY_MS;
 
-  const usercount = await readCurrentUsercount(env.CURRENT_USERS_URL, fetcher, retryDelayMs);
-  const data: StatsRow = [bucket, usercount];
+  const { usercount, uniquecount } = await readCurrentUsercounts(env.CURRENT_USERS_URL, fetcher, retryDelayMs);
+  const data: StatsRow = [bucket, usercount, uniquecount];
 
   const key = monthlyKey(bucket);
   let existing: R2ObjectBodyLike | null;
@@ -262,11 +269,11 @@ export async function syncStats(env: Env, options: SyncOptions = {}): Promise<Sy
   return result;
 }
 
-export async function updateStatsPoint(env: Env, timestamp: number, usercount: number): Promise<UpdatePointResult> {
+export async function updateStatsPoint(env: Env, timestamp: number, usercount: number, uniquecount: number): Promise<UpdatePointResult> {
   const interval = readInterval(env);
   const bucket = bucketTimestamp(timestamp, interval);
-  const data: StatsRow = [bucket, usercount];
-  if (!isStatsRow(data)) throw new SyncError("Request usercount must be a finite non-negative integer.", 400);
+  const data: StatsRow = [bucket, usercount, uniquecount];
+  if (!isStatsRow(data)) throw new SyncError("Request counts must be finite non-negative integers.", 400);
 
   const key = monthlyKey(bucket);
   let existing: R2ObjectBodyLike | null;
@@ -339,7 +346,7 @@ export default {
     try {
       if (url.pathname === "/admin/point") {
         const payload = validateUpdatePointPayload(await readJsonRequest(request));
-        return json(await updateStatsPoint(env, payload.timestamp, payload.usercount));
+        return json(await updateStatsPoint(env, payload.timestamp, payload.usercount, payload.uniquecount));
       }
       return json(await syncStats(env));
     } catch (error) {

@@ -54,7 +54,7 @@ function generateArchive(legacyPayload, outputDir, r2InputRows = []) {
     dataset: DATASET,
     archiveThroughPeriod,
     format: {
-      rowShape: ["epochSeconds", "usercount"],
+      rowShape: ["epochSeconds", "usercount", "uniquecount?"],
       timestampUnit: "seconds",
       order: "ascending",
     },
@@ -86,11 +86,10 @@ function normalizeLegacyRows(rows) {
 function normalizeR2Rows(rows) {
   if (!Array.isArray(rows)) throw new Error("R2 input must be an array of tuples.");
   const normalized = rows.map((row, index) => {
-    if (!Array.isArray(row) || row.length !== 2
-      || !isNonnegativeInteger(row[0]) || !isNonnegativeInteger(row[1])) {
-      throw new Error(`Invalid R2 row ${index + 1}: expected a non-negative integer tuple.`);
+    if (!isStatsTuple(row)) {
+      throw new Error(`Invalid R2 row ${index + 1}: expected a two- or three-value non-negative integer tuple.`);
     }
-    return [row[0], row[1]];
+    return row.length === 3 ? [row[0], row[1], row[2]] : [row[0], row[1]];
   });
   return dedupeLast(normalized);
 }
@@ -159,9 +158,8 @@ function parseJsonlFile(filePath, fileName = path.basename(filePath)) {
     } catch {
       throw new Error(`Invalid JSONL in ${filePath} at line ${index + 1}: malformed JSON.`);
     }
-    if (!Array.isArray(row) || row.length !== 2
-      || !isNonnegativeInteger(row[0]) || !isNonnegativeInteger(row[1])) {
-      throw new Error(`Invalid JSONL in ${filePath} at line ${index + 1}: expected a non-negative integer tuple.`);
+    if (!isStatsTuple(row)) {
+      throw new Error(`Invalid JSONL in ${filePath} at line ${index + 1}: expected a two- or three-value non-negative integer tuple.`);
     }
     if (monthNameForTimestamp(row[0]) !== match[1]) {
       throw new Error(`Invalid JSONL in ${filePath} at line ${index + 1}: timestamp does not match filename month.`);
@@ -208,6 +206,14 @@ function dateKeyForTimestamp(timestamp) {
 
 function isNonnegativeInteger(value) {
   return Number.isSafeInteger(value) && value >= 0;
+}
+
+function isStatsTuple(value) {
+  return Array.isArray(value)
+    && (value.length === 2 || value.length === 3)
+    && isNonnegativeInteger(value[0])
+    && isNonnegativeInteger(value[1])
+    && (value.length === 2 || isNonnegativeInteger(value[2]));
 }
 
 function previousMonthName(monthKey) {

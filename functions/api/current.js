@@ -20,12 +20,13 @@ export async function onRequestGet() {
     }
 
     const payload = await upstream.json();
-    const usercount = Number(payload?.usercount);
+    const usercount = payload?.usercount;
+    const uniquecount = payload?.uniquecount;
 
-    if (!Number.isFinite(usercount)) {
+    if (!isNonnegativeInteger(usercount) || !isNonnegativeInteger(uniquecount)) {
       return json(
         {
-          error: "MapleLegends API response did not include usercount.",
+          error: "MapleLegends API response did not include valid usercount and uniquecount values.",
         },
         502,
       );
@@ -35,6 +36,7 @@ export async function onRequestGet() {
       source: "MapleLegends API",
       fetchedAt: new Date().toISOString(),
       usercount,
+      uniquecount,
     });
   } catch (error) {
     return json(
@@ -47,6 +49,10 @@ export async function onRequestGet() {
       502,
     );
   }
+}
+
+function isNonnegativeInteger(value) {
+  return Number.isSafeInteger(value) && value >= 0;
 }
 
 function json(body, status = 200) {

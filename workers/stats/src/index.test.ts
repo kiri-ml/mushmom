@@ -77,15 +77,18 @@ describe("stats rows", () => {
   });
 
   it("parses and serializes compact JSONL tuples", () => {
-    const rows: StatsRow[] = [[300, 0], [600, 1234]];
-    expect(parseJsonl("[300,0]\n[600,1234]\n")).toEqual(rows);
-    expect(serializeJsonl(rows)).toBe("[300,0]\n[600,1234]\n");
+    const rows: StatsRow[] = [[300, 0], [600, 1234, 617]];
+    expect(parseJsonl("[300,0]\n[600,1234,617]\n")).toEqual(rows);
+    expect(serializeJsonl(rows)).toBe("[300,0]\n[600,1234,617]\n");
     expect(parseJsonl("  \n")).toEqual([]);
   });
 
   it("validates tuple rows, including zero user counts", () => {
     expect(isStatsRow([300, 0])).toBe(true);
     expect(isStatsRow([300, 12])).toBe(true);
+    expect(isStatsRow([300, 12, 6])).toBe(true);
+    expect(isStatsRow([300, 12, -1])).toBe(false);
+    expect(isStatsRow([300, 12, 1.5])).toBe(false);
     expect(isStatsRow([300, -1])).toBe(false);
     expect(isStatsRow([300, 1.5])).toBe(false);
     expect(isStatsRow([300, "12"])).toBe(false);
@@ -118,10 +121,26 @@ describe("stats sync validation", () => {
     expect(bucket.puts).toEqual([]);
   });
 
+  it("rejects repeated invalid upstream unique counts without writing", async () => {
+    const bucket = new FakeBucket();
+    const fetcher = responsesWith(
+      { usercount: 1234 },
+      { usercount: 1234, uniquecount: -1 },
+    );
+
+    await expect(syncStats(createEnv(bucket), {
+      now: new Date("2026-07-03T00:01:00.000Z"),
+      fetcher,
+      retryDelayMs: 0,
+    })).rejects.toThrow("uniquecount must be a finite non-negative integer");
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(bucket.puts).toEqual([]);
+  });
+
   it("upserts an existing monthly object", async () => {
     const bucket = new FakeBucket();
     bucket.objects.set("stats/jsonl/2026-07.jsonl", "[1783037100,12]\n[1783036500,8]\n");
-    const fetcher = responsesWith({ usercount: 0 }, { usercount: 0 });
+    const fetcher = responsesWith({ usercount: 0, uniquecount: 0 }, { usercount: 0, uniquecount: 0 });
 
     const result = await syncStats(createEnv(bucket), {
       now: new Date("2026-07-03T00:01:00.000Z"),
@@ -130,13 +149,13 @@ describe("stats sync validation", () => {
     });
 
     expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe(
-      "[1783036500,8]\n[1783036800,0]\n[1783037100,12]\n",
+      "[1783036500,8]\n[1783036800,0,0]\n[1783037100,12]\n",
     );
     expect(bucket.gets).toEqual(["stats/jsonl/2026-07.jsonl"]);
     expect(result).toEqual({
       fetchedAt: "2026-07-03T00:01:00.000Z",
       bucket: 1_783_036_800,
-      data: [1_783_036_800, 0],
+      data: [1_783_036_800, 0, 0],
     });
     expect(bucket.puts).toHaveLength(1);
     expect(fetcher).toHaveBeenCalledTimes(2);
@@ -144,7 +163,7 @@ describe("stats sync validation", () => {
 
   it("writes the retried value when an initial zero is not confirmed", async () => {
     const bucket = new FakeBucket();
-    const fetcher = responsesWith({ usercount: 0 }, { usercount: 12 });
+    const fetcher = responsesWith({ usercount: 0, uniquecount: 0 }, { usercount: 12, uniquecount: 7 });
 
     const result = await syncStats(createEnv(bucket), {
       now: new Date("2026-07-03T00:01:00.000Z"),
@@ -153,14 +172,14 @@ describe("stats sync validation", () => {
     });
 
     expect(fetcher).toHaveBeenCalledTimes(2);
-    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe("[1783036800,12]\n");
-    expect(result.data).toEqual([1_783_036_800, 12]);
+    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe("[1783036800,12,7]\n");
+    expect(result.data).toEqual([1_783_036_800, 12, 7]);
   });
 
   it("writes the initial zero when zero confirmation fails", async () => {
     const bucket = new FakeBucket();
     const fetcher = vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ usercount: 0 }), {
+      .mockResolvedValueOnce(new Response(JSON.stringify({ usercount: 0, uniquecount: 0 }), {
         status: 200,
         headers: { "content-type": "application/json" },
       }))
@@ -173,15 +192,15 @@ describe("stats sync validation", () => {
     });
 
     expect(fetcher).toHaveBeenCalledTimes(2);
-    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe("[1783036800,0]\n");
-    expect(result.data).toEqual([1_783_036_800, 0]);
+    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe("[1783036800,0,0]\n");
+    expect(result.data).toEqual([1_783_036_800, 0, 0]);
   });
 
   it("writes the retried value when the initial fetch fails", async () => {
     const bucket = new FakeBucket();
     const fetcher = vi.fn()
       .mockRejectedValueOnce(new Error("temporary upstream failure"))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ usercount: 12 }), {
+      .mockResolvedValueOnce(new Response(JSON.stringify({ usercount: 12, uniquecount: 7 }), {
         status: 200,
         headers: { "content-type": "application/json" },
       }));
@@ -193,15 +212,15 @@ describe("stats sync validation", () => {
     });
 
     expect(fetcher).toHaveBeenCalledTimes(2);
-    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe("[1783036800,12]\n");
-    expect(result.data).toEqual([1_783_036_800, 12]);
+    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe("[1783036800,12,7]\n");
+    expect(result.data).toEqual([1_783_036_800, 12, 7]);
   });
 
   it("writes zero when the initial fetch fails and retry returns zero", async () => {
     const bucket = new FakeBucket();
     const fetcher = vi.fn()
       .mockResolvedValueOnce(errorResponse(503))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ usercount: 0 }), {
+      .mockResolvedValueOnce(new Response(JSON.stringify({ usercount: 0, uniquecount: 0 }), {
         status: 200,
         headers: { "content-type": "application/json" },
       }));
@@ -213,8 +232,8 @@ describe("stats sync validation", () => {
     });
 
     expect(fetcher).toHaveBeenCalledTimes(2);
-    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe("[1783036800,0]\n");
-    expect(result.data).toEqual([1_783_036_800, 0]);
+    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe("[1783036800,0,0]\n");
+    expect(result.data).toEqual([1_783_036_800, 0, 0]);
   });
 
   it("rejects repeated initial fetch failures without writing", async () => {
@@ -239,11 +258,12 @@ describe("stats sync validation", () => {
 
     await syncStats(createEnv(bucket), {
       now: new Date("2026-07-03T00:01:00.000Z"),
-      fetcher: responseWith({ usercount: 5 }),
+      fetcher: responseWith({ usercount: 5, uniquecount: 3 }),
+      retryDelayMs: 0,
     });
 
     expect(bucket.gets).toEqual(["stats/jsonl/2026-07.jsonl"]);
-    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe("[1783036800,5]\n");
+    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe("[1783036800,5,3]\n");
   });
 
   it.each([
@@ -256,7 +276,8 @@ describe("stats sync validation", () => {
 
     await expect(syncStats(createEnv(bucket), {
       now: new Date("2026-07-03T00:01:00.000Z"),
-      fetcher: responseWith({ usercount: 12 }),
+      fetcher: responseWith({ usercount: 12, uniquecount: 7 }),
+      retryDelayMs: 0,
     })).rejects.toThrow("Failed to parse existing");
     expect(bucket.puts).toEqual([]);
   });
@@ -267,26 +288,26 @@ describe("manual stats point updates", () => {
     const bucket = new FakeBucket();
     bucket.objects.set("stats/jsonl/2026-07.jsonl", "[1783036500,8]\n[1783036800,5]\n[1783037100,12]\n");
 
-    const result = await updateStatsPoint(createEnv(bucket), 1_783_036_979, 42);
+    const result = await updateStatsPoint(createEnv(bucket), 1_783_036_979, 42, 21);
 
     expect(result).toEqual({
       bucket: 1_783_036_800,
       key: "stats/jsonl/2026-07.jsonl",
-      data: [1_783_036_800, 42],
+      data: [1_783_036_800, 42, 21],
     });
     expect(bucket.gets).toEqual(["stats/jsonl/2026-07.jsonl"]);
     expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe(
-      "[1783036500,8]\n[1783036800,42]\n[1783037100,12]\n",
+      "[1783036500,8]\n[1783036800,42,21]\n[1783037100,12]\n",
     );
   });
 
   it("creates the monthly object when the timestamp belongs to a missing object", async () => {
     const bucket = new FakeBucket();
 
-    await updateStatsPoint(createEnv(bucket), 1_783_036_979, 42);
+    await updateStatsPoint(createEnv(bucket), 1_783_036_979, 42, 21);
 
     expect(bucket.gets).toEqual(["stats/jsonl/2026-07.jsonl"]);
-    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe("[1783036800,42]\n");
+    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe("[1783036800,42,21]\n");
   });
 
   it("exposes an authenticated POST API for manual point updates", async () => {
@@ -298,19 +319,23 @@ describe("manual stats point updates", () => {
         authorization: "Bearer secret",
         "content-type": "application/json",
       },
-      body: JSON.stringify({ timestamp: 1_783_036_979, usercount: 42 }),
+      body: JSON.stringify({ timestamp: 1_783_036_979, usercount: 42, uniquecount: 21 }),
     }), env);
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
       bucket: 1_783_036_800,
       key: "stats/jsonl/2026-07.jsonl",
-      data: [1_783_036_800, 42],
+      data: [1_783_036_800, 42, 21],
     });
-    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe("[1783036800,42]\n");
+    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe("[1783036800,42,21]\n");
   });
 
-  it("rejects invalid manual update payloads without writing", async () => {
+  it.each([
+    { timestamp: 1_783_036_979, usercount: 1.5, uniquecount: 1 },
+    { timestamp: 1_783_036_979, usercount: 42 },
+    { timestamp: 1_783_036_979, usercount: 42, uniquecount: -1 },
+  ])("rejects incomplete or invalid manual update payloads without writing", async (payload) => {
     const bucket = new FakeBucket();
     const env = createEnv(bucket);
     const response = await worker.fetch(new Request("https://stats.example/admin/point", {
@@ -319,7 +344,7 @@ describe("manual stats point updates", () => {
         authorization: "Bearer secret",
         "content-type": "application/json",
       },
-      body: JSON.stringify({ timestamp: 1_783_036_979, usercount: 1.5 }),
+      body: JSON.stringify(payload),
     }), env);
 
     expect(response.status).toBe(400);

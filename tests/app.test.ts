@@ -146,7 +146,7 @@ async function loadAppModule(currentLang = "en-US") {
   const globals = createBaseGlobals({
     document: createStubDocument(),
     navigator: { languages: [currentLang], language: currentLang },
-    fetch: mockFetch({ usercount: 0, data: [[1776945603, 1459]], chunks: [] }),
+    fetch: mockFetch({ usercount: 0, uniquecount: 0, data: [[1776945603, 1459]], chunks: [] }),
     echarts: {
       init: () => ({
         setOption(option: unknown) { renderedOptions.push(option); },
@@ -182,9 +182,10 @@ async function loadStatsModule() {
 }
 
 type ArchiveManifest = StatsManifest;
+type ArchiveRow = [number, number] | [number, number, number];
 type StatsArchiveGenerator = {
-  generateArchive: (payload: unknown, outputDir: string, r2Rows?: Array<[number, number]>) => { manifest: ArchiveManifest };
-  readJsonlDirectory: (jsonlDir: string) => Array<[number, number]>;
+  generateArchive: (payload: unknown, outputDir: string, r2Rows?: ArchiveRow[]) => { manifest: ArchiveManifest };
+  readJsonlDirectory: (jsonlDir: string) => ArchiveRow[];
 };
 
 function makeChunk(period: string, minTimestamp: number, maxTimestamp = minTimestamp): StatsManifestChunk {
@@ -347,6 +348,19 @@ describe("stats archive generator", () => {
     const payload = JSON.parse(fs.readFileSync(path.join(tempDir, june.file), "utf8"));
     expect(payload.data).toEqual([[1782863104, 11]]);
     expect(result.manifest.chunks.some((chunk) => chunk.period === "2026-07")).toBe(false);
+  });
+
+  it("preserves mixed legacy and unique-count R2 tuples", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mushmom-mixed-tuples-"));
+    const generator = require(path.join(repoRoot, "scripts/generate_stats_archive.cjs")) as StatsArchiveGenerator;
+    const result = generator.generateArchive({ data: [
+      { timestamp: "2026-06-30T23:45:04Z", usercount: 11 },
+    ] }, tempDir, [[1782864000, 20], [1782864300, 21, 10], [1785542400, 22, 11]]);
+
+    expect(result.manifest.format.rowShape).toEqual(["epochSeconds", "usercount", "uniquecount?"]);
+    const july = result.manifest.chunks.find((chunk) => chunk.period === "2026-07")!;
+    const payload = JSON.parse(fs.readFileSync(path.join(tempDir, july.file), "utf8"));
+    expect(payload.data).toEqual([[1782864000, 20], [1782864300, 21, 10]]);
   });
 
   it("emits deterministic hashed bytes, monthly/annual partitions, and removes stale JSON", () => {
@@ -581,7 +595,7 @@ describe("app behavior", () => {
     };
     const globals = createBaseGlobals({
       document: createStubDocument(),
-      fetch: mockFetch({ usercount: 1700 }),
+      fetch: mockFetch({ usercount: 1700, uniquecount: 850 }),
       echarts: {
         init: () => ({
           setOption(option: unknown) { renderedOptions.push(option); },
