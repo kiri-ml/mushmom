@@ -529,7 +529,6 @@ function buildTimelineOptions(points: StatsPoint[]) {
   const visible = pointsForRange(points, currentRange);
   const config = getTimelineConfig(currentRange, visible);
   const characterValues = visible.map((point) => [point.date.getTime(), point.characterCount]);
-  const playerSampleCount = visible.filter((point) => typeof point.playerCount === "number" && Number.isFinite(point.playerCount)).length;
   const playerValues = visible.map((point) => [
     point.date.getTime(),
     typeof point.playerCount === "number" && Number.isFinite(point.playerCount) ? point.playerCount : null,
@@ -579,13 +578,13 @@ function buildTimelineOptions(points: StatsPoint[]) {
     series: bucketed ? [
       { id: "character-range-base", type: "line", stack: "character-range", data: characterBuckets.map((bucket) => [bucket.time, bucket.min]), symbol: "none", lineStyle: { opacity: 0 }, itemStyle: { opacity: 0 }, areaStyle: { opacity: 0 }, silent: true, tooltip: { show: false } },
       { id: "character-range-spread", type: "line", stack: "character-range", data: characterBuckets.map((bucket) => [bucket.time, bucket.max - bucket.min]), symbol: "none", lineStyle: { opacity: 0 }, areaStyle: { color: "rgba(125, 216, 125, 0.16)" }, silent: true, tooltip: { show: false } },
-      { id: "character-average", name: characterName, type: "line", smooth: true, showSymbol: characterBuckets.length < 80, symbolSize: 7, lineStyle: { width: 3, color: "#7dd87d" }, itemStyle: { color: "#f1c44f" }, data: characterBuckets.map((bucket) => [bucket.time, Math.round(bucket.avg)]), z: 3 },
+      { id: "character-average", name: characterName, type: "line", smooth: true, symbol: "none", lineStyle: { width: 3, color: "#7dd87d" }, itemStyle: { color: "#f1c44f" }, data: characterBuckets.map((bucket) => [bucket.time, Math.round(bucket.avg)]), z: 3 },
       { id: "player-range-base", type: "line", stack: "player-range", data: playerBucketTimes.map((time) => [time, playerBucketMap.get(time)?.min ?? null]), symbol: "none", connectNulls: false, lineStyle: { opacity: 0 }, itemStyle: { opacity: 0 }, areaStyle: { opacity: 0 }, silent: true, tooltip: { show: false } },
       { id: "player-range-spread", type: "line", stack: "player-range", data: playerBucketTimes.map((time) => { const bucket = playerBucketMap.get(time); return [time, bucket ? bucket.max - bucket.min : null]; }), symbol: "none", connectNulls: false, lineStyle: { opacity: 0 }, areaStyle: { color: PLAYER_RANGE_COLOR }, silent: true, tooltip: { show: false } },
-      { id: "player-average", name: playerName, type: "line", smooth: true, connectNulls: false, showSymbol: playerBuckets.length < 80, symbolSize: 7, lineStyle: { width: 3, color: PLAYER_COLOR }, itemStyle: { color: PLAYER_COLOR }, data: playerBucketTimes.map((time) => [time, playerBucketMap.has(time) ? Math.round(playerBucketMap.get(time)!.avg) : null]), z: 4 },
+      { id: "player-average", name: playerName, type: "line", smooth: true, connectNulls: false, symbol: "none", lineStyle: { width: 3, color: PLAYER_COLOR }, itemStyle: { color: PLAYER_COLOR }, data: playerBucketTimes.map((time) => [time, playerBucketMap.has(time) ? Math.round(playerBucketMap.get(time)!.avg) : null]), z: 4 },
     ] : [
-      { id: "characters", name: characterName, type: "line", smooth: false, showSymbol: visible.length < 80, symbolSize: 7, lineStyle: { width: 3, color: "#7dd87d" }, itemStyle: { color: "#f1c44f" }, areaStyle: { color: { type: "linear", x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: "rgba(125, 216, 125, 0.36)" }, { offset: 1, color: "rgba(125, 216, 125, 0.02)" }] } }, data: characterValues },
-      { id: "players", name: playerName, type: "line", smooth: false, connectNulls: false, showSymbol: playerSampleCount < 80, symbolSize: 6, lineStyle: { width: 3, color: PLAYER_COLOR }, itemStyle: { color: PLAYER_COLOR }, data: playerValues, z: 4 },
+      { id: "characters", name: characterName, type: "line", smooth: false, symbol: "none", lineStyle: { width: 3, color: "#7dd87d" }, itemStyle: { color: "#f1c44f" }, areaStyle: { color: { type: "linear", x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: "rgba(125, 216, 125, 0.36)" }, { offset: 1, color: "rgba(125, 216, 125, 0.02)" }] } }, data: characterValues },
+      { id: "players", name: playerName, type: "line", smooth: false, connectNulls: false, symbol: "none", lineStyle: { width: 3, color: PLAYER_COLOR }, itemStyle: { color: PLAYER_COLOR }, data: playerValues, z: 4 },
     ],
     graphic: bucketed ? (characterBuckets.length === 0 ? emptyGraphic() : null) : (characterValues.length === 0 ? emptyGraphic() : null),
   };

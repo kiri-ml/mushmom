@@ -496,13 +496,14 @@ describe("app behavior", () => {
       { date: new Date(Date.UTC(2026, 3, 25, 12, 0, 0)), characterCount: 1300 },
     ];
     module.testApi.setCurrentRangeForTest("7d");
-    const rawSeries = module.buildTimelineOptions(points).series as Array<{ smooth?: boolean; type?: string }>;
+    const rawSeries = module.buildTimelineOptions(points).series as Array<{ smooth?: boolean; symbol?: string; type?: string }>;
     expect(rawSeries.map((series) => series.type)).toEqual(["line", "line"]);
     expect(rawSeries.every((series) => series.smooth === false)).toBe(true);
+    expect(rawSeries.every((series) => series.symbol === "none")).toBe(true);
     expect((rawSeries[1] as { data: Array<[number, number | null]> }).data.map(([, value]) => value)).toEqual([600, 625, null]);
     module.testApi.setCurrentRangeForTest("28d");
     const bucketedOptions = module.buildTimelineOptions(points);
-    const bucketedSeries = bucketedOptions.series as Array<{ id?: string; smooth?: boolean; type?: string }>;
+    const bucketedSeries = bucketedOptions.series as Array<{ id?: string; smooth?: boolean; symbol?: string; type?: string }>;
     expect(bucketedSeries.map((series) => series.type)).toEqual(["line", "line", "line", "line", "line", "line"]);
     expect(bucketedSeries.map((series) => series.id)).toEqual([
       "character-range-base", "character-range-spread", "character-average",
@@ -510,6 +511,7 @@ describe("app behavior", () => {
     ]);
     expect(bucketedSeries[2]?.smooth).toBe(true);
     expect(bucketedSeries[5]?.smooth).toBe(true);
+    expect(bucketedSeries.every((series) => series.symbol === "none")).toBe(true);
     expect((bucketedSeries[5] as { data: Array<[number, number | null]> }).data.map(([, value]) => value)).toEqual([613, null]);
     expect(bucketedOptions.yAxis.min).toBe(0);
     expect(bucketedOptions.legend.selectedMode).toBe(false);
