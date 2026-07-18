@@ -521,8 +521,13 @@ function emptyGraphic(text = tr("ui.noLiveData")) {
   return { type: "text", left: "center", top: "middle", style: { text, fill: "#a9b1ad", font: "700 16px Inter, sans-serif" } };
 }
 
+function formatTooltipValue(value: number | string | null | undefined): number | string {
+  if (value == null) return "-";
+  return Number.isFinite(Number(value)) ? formatLocaleNumber(Number(value)) : value;
+}
+
 function baseAxisOption() {
-  return { animationDuration: 450, backgroundColor: "transparent", tooltip: { trigger: "axis", backgroundColor: "#22292a", borderColor: "#35403e", textStyle: { color: "#f4f1e8" }, valueFormatter: (value: number | string) => Number.isFinite(Number(value)) ? formatLocaleNumber(Number(value)) : value } };
+  return { animationDuration: 450, backgroundColor: "transparent", tooltip: { trigger: "axis", backgroundColor: "#22292a", borderColor: "#35403e", textStyle: { color: "#f4f1e8" }, valueFormatter: formatTooltipValue } };
 }
 
 function buildTimelineOptions(points: StatsPoint[]) {
@@ -569,7 +574,7 @@ function buildTimelineOptions(points: StatsPoint[]) {
         if (playerBucket) rows.push(...summaryRows(tr("metric.players"), playerBucket));
         return rows.join("<br />");
       },
-    } : { trigger: "axis", backgroundColor: "#22292a", borderColor: "#35403e", textStyle: { color: "#f4f1e8" }, valueFormatter: (value: number | string) => Number.isFinite(Number(value)) ? formatLocaleNumber(Number(value)) : value },
+    } : { trigger: "axis", backgroundColor: "#22292a", borderColor: "#35403e", textStyle: { color: "#f4f1e8" }, valueFormatter: formatTooltipValue },
     legend: { top: 8, data: [characterName, playerName], selectedMode: false, textStyle: { color: "#a9b1ad" } },
     grid: { left: 52, right: 24, top: 54, bottom: 76 },
     xAxis: { type: "time", axisLine: { lineStyle: { color: "#35403e" } }, axisLabel: { color: "#a9b1ad", formatter: (value: number) => formatTimelineAxisLabel(value, currentRange) }, splitLine: { show: false } },

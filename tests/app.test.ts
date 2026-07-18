@@ -624,6 +624,17 @@ describe("app behavior", () => {
     expect(bounds.max).toBe(100);
   });
 
+  it("shows a dash instead of zero for missing tooltip values", async () => {
+    const { module } = await loadAppModule();
+    const options = module.buildTimelineOptions([
+      { date: new Date(2026, 0, 1), characterCount: 1200, playerCount: null },
+    ]);
+    const formatter = options.tooltip.valueFormatter as (value: number | null) => number | string;
+
+    expect(formatter(null)).toBe("-");
+    expect(formatter(0)).toBe("0");
+  });
+
   it("shows the last sample date as secondary metric content", () => {
     expect(indexHtml).toContain('id="last-sample-date" class="metric-secondary-value"');
   });
