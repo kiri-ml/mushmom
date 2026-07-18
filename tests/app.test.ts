@@ -511,11 +511,27 @@ describe("app behavior", () => {
     ]);
     expect(bucketedSeries[2]?.smooth).toBe(true);
     expect(bucketedSeries[5]?.smooth).toBe(true);
-    expect(bucketedSeries.every((series) => series.symbol === "none")).toBe(true);
+    expect(bucketedSeries.map((series) => series.symbol)).toEqual(["none", "none", "none", "none", "none", "circle"]);
     expect((bucketedSeries[5] as { data: Array<[number, number | null]> }).data.map(([, value]) => value)).toEqual([613, null]);
     expect(bucketedOptions.yAxis.min).toBe(0);
     expect(bucketedOptions.legend.selectedMode).toBe(false);
     expect(module.buildTimelineOptions([{ date: new Date(Date.UTC(2026, 3, 25)), characterCount: 0, playerCount: 0 }]).yAxis.max).toBeUndefined();
+  });
+
+  it("shows a timeline symbol only when a series has one data point", async () => {
+    const { module, globals } = await loadAppModule();
+    useWindow(globals);
+    module.testApi.setCurrentRangeForTest("7d");
+    const singlePointOptions = module.buildTimelineOptions([
+      { date: new Date(Date.UTC(2026, 3, 25)), characterCount: 0, playerCount: 0 },
+    ]);
+    expect(singlePointOptions.series.map((series: { symbol?: string }) => series.symbol)).toEqual(["circle", "circle"]);
+
+    const singlePlayerPointOptions = module.buildTimelineOptions([
+      { date: new Date(Date.UTC(2026, 3, 24)), characterCount: 1200 },
+      { date: new Date(Date.UTC(2026, 3, 25)), characterCount: 1300, playerCount: 600 },
+    ]);
+    expect(singlePlayerPointOptions.series.map((series: { symbol?: string }) => series.symbol)).toEqual(["none", "circle"]);
   });
 
   it("switches heatmap and distribution to player samples and resets each view to characters", async () => {
