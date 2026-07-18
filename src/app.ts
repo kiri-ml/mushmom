@@ -5,7 +5,7 @@ type ChartKind = "timeline" | "heatmap" | "distribution";
 type ChartMetric = "characters" | "players";
 type BucketUnit = "hour" | "day" | "week";
 
-type MetricElementKey = "currentCharacters" | "currentPlayers" | "peakCharacters" | "peakPlayers" | "averageCharacters" | "averagePlayers" | "lastSample" | "sampleCount" | "rangeLabel" | "sourceLabel";
+type MetricElementKey = "currentCharacters" | "currentPlayers" | "peakCharacters" | "peakPlayers" | "averageCharacters" | "averagePlayers" | "lastSample" | "lastSampleDate" | "sampleCount" | "rangeLabel" | "sourceLabel";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
@@ -80,6 +80,7 @@ const elements: Record<MetricElementKey, HTMLElement> = {
   averageCharacters: requireElement("#average-character-count"),
   averagePlayers: requireElement("#average-player-count"),
   lastSample: requireElement("#last-sample"),
+  lastSampleDate: requireElement("#last-sample-date"),
   sampleCount: requireElement("#sample-count"),
   rangeLabel: requireElement("#range-label"),
   sourceLabel: requireElement("#source-label"),
@@ -327,6 +328,7 @@ function updateHistoricalMetrics(points: StatsPoint[], source: string, sourceUrl
   elements.averageCharacters.textContent = formatInteger(avg);
   elements.averagePlayers.textContent = formatInteger(playerSummary.average);
   elements.lastSample.textContent = latest ? formatTime(latest.date) : "--";
+  elements.lastSampleDate.textContent = latest ? formatDate(latest.date) : "--";
   elements.sampleCount.textContent = formatLocaleNumber(points.length);
   setSourceLabel(source, sourceUrl);
   elements.rangeLabel.textContent = points.length >= 2 ? `${formatDate(points[0].date)} - ${formatDate(points[points.length - 1].date)}` : latest ? formatDate(latest.date) : "--";
@@ -338,6 +340,7 @@ function clearHistoricalMetrics(source: string): void {
   elements.averageCharacters.textContent = "--";
   elements.averagePlayers.textContent = "--";
   elements.lastSample.textContent = "--";
+  elements.lastSampleDate.textContent = "--";
   elements.sampleCount.textContent = "0";
   elements.rangeLabel.textContent = "--";
   setSourceLabel(source);

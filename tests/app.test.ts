@@ -622,6 +622,10 @@ describe("app behavior", () => {
     expect(bounds.max).toBe(100);
   });
 
+  it("shows the last sample date as secondary metric content", () => {
+    expect(indexHtml).toContain('id="last-sample-date" class="metric-secondary-value"');
+  });
+
   it("spreads heatmap colors across high-population averages", async () => {
     const { module, globals } = await loadAppModule();
     useWindow(globals);
