@@ -312,6 +312,9 @@ describe("vite migration", () => {
     expect(transformed.indexOf(currentPreload)).toBeLessThan(transformed.indexOf(script));
     expect(transformed.indexOf(script)).toBeLessThan(transformed.indexOf('<script type="module" src="/src/main.ts"></script>'));
     expect(indexHtml).not.toContain("echarts@6.1.0");
+    expect(indexHtml).toContain('id="current-unique-count"');
+    expect(indexHtml).toContain('id="peak-unique-count"');
+    expect(indexHtml).toContain('id="average-unique-count"');
   });
 });
 
@@ -429,6 +432,10 @@ describe("bundled i18n", () => {
     expect(localeRegistry.length).toBeGreaterThan(5);
     expect(localeRegistry[0]?.code).toBe("en-US");
     expect(i18nMessages["en-US"]?.["status.loading"]).toBe("LOADING");
+    expect(i18nMessages["en-US"]?.["metric.currentPlayers"]).toBe("Players online");
+    expect(i18nMessages["en-US"]?.["metric.uniqueIp"]).toBe("Unique IP");
+    expect(i18nMessages["zh-Hans"]?.["metric.uniqueIp"]).toBe("独立 IP");
+    expect(i18nMessages["zh-Hant"]?.["metric.uniqueIp"]).toBe("獨立 IP");
     expect(i18nMessages["zh-Hans"]?.["chartView.heatmap"].length).toBeGreaterThan(0);
   });
 
@@ -516,8 +523,23 @@ describe("app behavior", () => {
       { timestamp: "2020-06-24 17:45:04.796+00", usercount: 991 },
       { timestamp: "2020-06-24 18:00:04.796+00", usercount: -1 },
       [1776945603, 1459],
+      [1776945903, 1500, 750],
     ]);
-    expect(points.map((point) => point.count)).toEqual([1832, 2125, 0, 1, 991, 1459]);
+    expect(points.map((point) => point.count)).toEqual([1832, 2125, 0, 1, 991, 1459, 1500]);
+    expect(points.map((point) => point.uniqueCount)).toEqual([null, null, null, null, null, null, 750]);
+  });
+
+  it("summarizes unique players only from samples that include them", async () => {
+    const { module } = await loadAppModule();
+    expect(module.summarizeUniqueCounts([
+      { date: new Date(0), count: 1000, uniqueCount: null },
+      { date: new Date(1), count: 1200, uniqueCount: 600 },
+      { date: new Date(2), count: 1400, uniqueCount: 700 },
+    ])).toEqual({ peak: 700, average: 650 });
+
+    const missing = module.summarizeUniqueCounts([{ date: new Date(0), count: 1000 }]);
+    expect(Number.isNaN(missing.peak)).toBe(true);
+    expect(Number.isNaN(missing.average)).toBe(true);
   });
 
   it("rerenders timeline axis labels with the selected locale", async () => {

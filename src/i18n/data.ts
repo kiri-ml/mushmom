@@ -16,10 +16,11 @@ const bundledMessages: MessageMap = {
     "status.ready": "READY",
     "status.failed": "FAILED",
     "source.unavailable": "Unavailable",
-    "metric.currentPlayers": "Current players",
+    "metric.currentPlayers": "Players online",
     "metric.peak24h": "24h peak",
     "metric.average24h": "24h average",
     "metric.lastSample": "Last sample",
+    "metric.uniqueIp": "Unique IP",
     "range.7d": "7 d",
     "range.28d": "28 d",
     "range.90d": "90 d",
@@ -64,7 +65,7 @@ const bundledMessages: MessageMap = {
     "ui.noLiveData": "No live data loaded",
     "error.statsLoaderUnavailable": "Stats loader is not available.",
     "error.currentUserRequestFailed": "Current user request failed: {status}",
-    "error.currentUserMissingCount": "Current user response was missing usercount"
+    "error.currentUserMissingCount": "Current user response was missing valid counts"
   },
   "de-DE": {
     "meta.title": "Mushmom | MapleLegends-Spielerzahl",
@@ -78,10 +79,11 @@ const bundledMessages: MessageMap = {
     "status.ready": "BEREIT",
     "status.failed": "FEHLGESCHLAGEN",
     "source.unavailable": "Nicht verfügbar",
-    "metric.currentPlayers": "Aktuelle Spieler",
+    "metric.currentPlayers": "Spieler online",
     "metric.peak24h": "24-h-Spitze",
     "metric.average24h": "24-h-Durchschnitt",
     "metric.lastSample": "Letzte Messung",
+    "metric.uniqueIp": "Eindeutige IP",
     "range.7d": "7 T",
     "range.28d": "28 T",
     "range.90d": "90 T",
@@ -126,7 +128,7 @@ const bundledMessages: MessageMap = {
     "ui.noLiveData": "Keine Live-Daten geladen",
     "error.statsLoaderUnavailable": "Der Statistik-Loader ist nicht verfügbar.",
     "error.currentUserRequestFailed": "Anfrage für aktuelle Spieler fehlgeschlagen: {status}",
-    "error.currentUserMissingCount": "Die Antwort für aktuelle Spieler enthält kein usercount"
+    "error.currentUserMissingCount": "Die Antwort für aktuelle Spieler enthält keine gültigen Zählwerte"
   },
   "es-ES": {
     "meta.title": "Mushmom | Cantidad de jugadores de MapleLegends",
@@ -140,10 +142,11 @@ const bundledMessages: MessageMap = {
     "status.ready": "LISTO",
     "status.failed": "FALLÓ",
     "source.unavailable": "No disponible",
-    "metric.currentPlayers": "Jugadores actuales",
+    "metric.currentPlayers": "Jugadores en línea",
     "metric.peak24h": "Pico 24 h",
     "metric.average24h": "Promedio 24 h",
     "metric.lastSample": "Última muestra",
+    "metric.uniqueIp": "IP única",
     "range.7d": "7 d",
     "range.28d": "28 d",
     "range.90d": "90 d",
@@ -188,7 +191,7 @@ const bundledMessages: MessageMap = {
     "ui.noLiveData": "No hay datos en vivo cargados",
     "error.statsLoaderUnavailable": "El cargador de estadísticas no está disponible.",
     "error.currentUserRequestFailed": "Falló la solicitud de jugadores actuales: {status}",
-    "error.currentUserMissingCount": "La respuesta de jugadores actuales no incluyó usercount"
+    "error.currentUserMissingCount": "La respuesta de jugadores actuales no incluyó conteos válidos"
   },
   "fr-FR": {
     "meta.title": "Mushmom | Nombre de joueurs MapleLegends",
@@ -202,10 +205,11 @@ const bundledMessages: MessageMap = {
     "status.ready": "PRÊT",
     "status.failed": "ÉCHEC",
     "source.unavailable": "Indisponible",
-    "metric.currentPlayers": "Joueurs actuels",
+    "metric.currentPlayers": "Joueurs en ligne",
     "metric.peak24h": "Pic 24 h",
     "metric.average24h": "Moyenne 24 h",
     "metric.lastSample": "Dernier échantillon",
+    "metric.uniqueIp": "IP unique",
     "range.7d": "7 j",
     "range.28d": "28 j",
     "range.90d": "90 j",
@@ -250,7 +254,7 @@ const bundledMessages: MessageMap = {
     "ui.noLiveData": "Aucune donnée en direct chargée",
     "error.statsLoaderUnavailable": "Le chargeur de statistiques n’est pas disponible.",
     "error.currentUserRequestFailed": "La requête des joueurs actuels a échoué : {status}",
-    "error.currentUserMissingCount": "La réponse des joueurs actuels ne contient pas usercount"
+    "error.currentUserMissingCount": "La réponse des joueurs actuels ne contient pas de décomptes valides"
   },
   "ja-JP": {
     "meta.title": "Mushmom | MapleLegends プレイヤー数",
@@ -264,10 +268,11 @@ const bundledMessages: MessageMap = {
     "status.ready": "準備完了",
     "status.failed": "失敗",
     "source.unavailable": "利用不可",
-    "metric.currentPlayers": "現在のプレイヤー",
+    "metric.currentPlayers": "オンラインプレイヤー",
     "metric.peak24h": "24時間ピーク",
     "metric.average24h": "24時間平均",
     "metric.lastSample": "最終サンプル",
+    "metric.uniqueIp": "ユニークIP",
     "range.7d": "7日",
     "range.28d": "28日",
     "range.90d": "90日",
@@ -312,7 +317,7 @@ const bundledMessages: MessageMap = {
     "ui.noLiveData": "ライブデータが読み込まれていません",
     "error.statsLoaderUnavailable": "統計ローダーを利用できません。",
     "error.currentUserRequestFailed": "現在のプレイヤー数リクエストに失敗しました: {status}",
-    "error.currentUserMissingCount": "現在のプレイヤー数レスポンスに usercount がありません"
+    "error.currentUserMissingCount": "現在のプレイヤー数レスポンスに有効なカウントがありません"
   },
   "ko-KR": {
     "meta.title": "Mushmom | MapleLegends 플레이어 수",
@@ -326,10 +331,11 @@ const bundledMessages: MessageMap = {
     "status.ready": "준비됨",
     "status.failed": "실패",
     "source.unavailable": "사용할 수 없음",
-    "metric.currentPlayers": "현재 접속자",
+    "metric.currentPlayers": "온라인 플레이어",
     "metric.peak24h": "24시간 최고",
     "metric.average24h": "24시간 평균",
     "metric.lastSample": "마지막 샘플",
+    "metric.uniqueIp": "고유 IP",
     "range.7d": "7일",
     "range.28d": "28일",
     "range.90d": "90일",
@@ -374,7 +380,7 @@ const bundledMessages: MessageMap = {
     "ui.noLiveData": "실시간 데이터가 로드되지 않았습니다",
     "error.statsLoaderUnavailable": "통계 로더를 사용할 수 없습니다.",
     "error.currentUserRequestFailed": "현재 접속자 수 요청 실패: {status}",
-    "error.currentUserMissingCount": "현재 접속자 수 응답에 usercount가 없습니다"
+    "error.currentUserMissingCount": "현재 접속자 수 응답에 유효한 집계가 없습니다"
   },
   "nl-NL": {
     "meta.title": "Mushmom | Aantal MapleLegends-spelers",
@@ -388,10 +394,11 @@ const bundledMessages: MessageMap = {
     "status.ready": "KLAAR",
     "status.failed": "MISLUKT",
     "source.unavailable": "Niet beschikbaar",
-    "metric.currentPlayers": "Huidige spelers",
+    "metric.currentPlayers": "Spelers online",
     "metric.peak24h": "24u-piek",
     "metric.average24h": "24u-gemiddelde",
     "metric.lastSample": "Laatste meting",
+    "metric.uniqueIp": "Uniek IP",
     "range.7d": "7 d",
     "range.28d": "28 d",
     "range.90d": "90 d",
@@ -436,7 +443,7 @@ const bundledMessages: MessageMap = {
     "ui.noLiveData": "Geen live data geladen",
     "error.statsLoaderUnavailable": "Statistieklader is niet beschikbaar.",
     "error.currentUserRequestFailed": "Aanvraag voor huidige spelers mislukt: {status}",
-    "error.currentUserMissingCount": "Antwoord voor huidige spelers bevat geen usercount"
+    "error.currentUserMissingCount": "Antwoord voor huidige spelers bevat geen geldige aantallen"
   },
   "pt-BR": {
     "meta.title": "Mushmom | Contagem de jogadores do MapleLegends",
@@ -450,10 +457,11 @@ const bundledMessages: MessageMap = {
     "status.ready": "PRONTO",
     "status.failed": "FALHOU",
     "source.unavailable": "Indisponível",
-    "metric.currentPlayers": "Jogadores atuais",
+    "metric.currentPlayers": "Jogadores online",
     "metric.peak24h": "Pico 24 h",
     "metric.average24h": "Média 24 h",
     "metric.lastSample": "Última amostra",
+    "metric.uniqueIp": "IP único",
     "range.7d": "7 d",
     "range.28d": "28 d",
     "range.90d": "90 d",
@@ -498,7 +506,7 @@ const bundledMessages: MessageMap = {
     "ui.noLiveData": "Nenhum dado ao vivo carregado",
     "error.statsLoaderUnavailable": "O carregador de estatísticas não está disponível.",
     "error.currentUserRequestFailed": "Falha na solicitação de jogadores atuais: {status}",
-    "error.currentUserMissingCount": "A resposta de jogadores atuais não incluiu usercount"
+    "error.currentUserMissingCount": "A resposta de jogadores atuais não incluiu contagens válidas"
   },
   "zh-Hans": {
     "meta.title": "Mushmom | MapleLegends 玩家人数",
@@ -512,10 +520,11 @@ const bundledMessages: MessageMap = {
     "status.ready": "就绪",
     "status.failed": "失败",
     "source.unavailable": "不可用",
-    "metric.currentPlayers": "当前在线",
+    "metric.currentPlayers": "在线玩家",
     "metric.peak24h": "24 小时峰值",
     "metric.average24h": "24 小时平均",
     "metric.lastSample": "最近采样",
+    "metric.uniqueIp": "独立 IP",
     "range.7d": "7 天",
     "range.28d": "28 天",
     "range.90d": "90 天",
@@ -560,7 +569,7 @@ const bundledMessages: MessageMap = {
     "ui.noLiveData": "暂无实时数据",
     "error.statsLoaderUnavailable": "统计数据加载器不可用。",
     "error.currentUserRequestFailed": "当前在线人数请求失败：{status}",
-    "error.currentUserMissingCount": "当前在线人数响应缺少 usercount 字段"
+    "error.currentUserMissingCount": "当前在线人数响应缺少有效计数"
   },
   "zh-Hant": {
     "meta.title": "Mushmom | MapleLegends 玩家人數",
@@ -574,10 +583,11 @@ const bundledMessages: MessageMap = {
     "status.ready": "就緒",
     "status.failed": "失敗",
     "source.unavailable": "不可用",
-    "metric.currentPlayers": "目前線上",
+    "metric.currentPlayers": "線上玩家",
     "metric.peak24h": "24 小時高峰",
     "metric.average24h": "24 小時平均",
     "metric.lastSample": "最近取樣",
+    "metric.uniqueIp": "獨立 IP",
     "range.7d": "7 天",
     "range.28d": "28 天",
     "range.90d": "90 天",
@@ -622,7 +632,7 @@ const bundledMessages: MessageMap = {
     "ui.noLiveData": "暫無即時資料",
     "error.statsLoaderUnavailable": "統計資料載入器不可用。",
     "error.currentUserRequestFailed": "目前線上人數請求失敗：{status}",
-    "error.currentUserMissingCount": "目前線上人數回應缺少 usercount 欄位"
+    "error.currentUserMissingCount": "目前線上人數回應缺少有效計數"
   }
 };
 

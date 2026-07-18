@@ -161,6 +161,8 @@ h1 {
 }
 
 .metric-card {
+  display: flex;
+  flex-direction: column;
   min-height: 116px;
   padding: 18px;
   border: 1px solid var(--line);
@@ -182,7 +184,36 @@ h1 {
   display: block;
   margin-top: 18px;
   font-size: clamp(1.7rem, 4vw, 2.7rem);
+  font-variant-numeric: tabular-nums;
   line-height: 1;
+}
+
+.metric-card .metric-secondary {
+  display: flex;
+  align-items: baseline;
+  gap: 0.38rem;
+  margin: 10px 0 0;
+  line-height: 1.2;
+}
+
+.metric-card .metric-secondary-value,
+.metric-card .metric-secondary-label {
+  display: inline;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.metric-card .metric-secondary-value {
+  color: var(--text);
+  font-size: 1rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+}
+
+.metric-card .metric-secondary-label {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 700;
 }
 
 .toolbar {
@@ -337,6 +368,19 @@ h1 {
   .metric-card strong {
     margin-top: 14px;
     font-size: clamp(1.45rem, 8vw, 2.2rem);
+  }
+
+  .metric-card .metric-secondary {
+    gap: 0.3rem;
+    margin-top: 8px;
+  }
+
+  .metric-card .metric-secondary-value {
+    font-size: 0.92rem;
+  }
+
+  .metric-card .metric-secondary-label {
+    font-size: 0.7rem;
   }
 
   .hero {

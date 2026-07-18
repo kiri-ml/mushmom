@@ -4,7 +4,7 @@ type ChartRange = "24h" | "7d" | "28d" | "90d" | "180d" | "ytd" | "1y" | "3y" | 
 type ChartKind = "timeline" | "heatmap" | "distribution";
 type BucketUnit = "hour" | "day" | "week";
 
-type MetricElementKey = "current" | "peak" | "average" | "lastSample" | "sampleCount" | "rangeLabel" | "sourceLabel";
+type MetricElementKey = "current" | "currentUnique" | "peak" | "peakUnique" | "average" | "averageUnique" | "lastSample" | "sampleCount" | "rangeLabel" | "sourceLabel";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
@@ -69,8 +69,11 @@ const KNOWN_BAD_GAP_END = Date.parse("2020-06-22T01:00:00.528Z");
 
 const elements: Record<MetricElementKey, HTMLElement> = {
   current: requireElement("#current-count"),
+  currentUnique: requireElement("#current-unique-count"),
   peak: requireElement("#peak-count"),
+  peakUnique: requireElement("#peak-unique-count"),
   average: requireElement("#average-count"),
+  averageUnique: requireElement("#average-unique-count"),
   lastSample: requireElement("#last-sample"),
   sampleCount: requireElement("#sample-count"),
   rangeLabel: requireElement("#range-label"),
@@ -170,20 +173,28 @@ function normalizePayload(payload: StatsPayload): StatsPoint[] {
   const rows: RawPayloadRow[] = Array.isArray(payload) ? payload : Array.isArray(payload.data) ? payload.data : Array.isArray(payload.values) ? payload.values : [];
 
   const normalized = rows
-    .map((row): { timestamp: unknown; usercount: unknown } => {
+    .map((row): { timestamp: unknown; usercount: unknown; uniquecount: unknown } => {
       if (Array.isArray(row)) {
-        return { timestamp: row[0], usercount: row[1] };
+        return { timestamp: row[0], usercount: row[1], uniquecount: row[2] };
       }
 
       return {
         timestamp: row.timestamp ?? row.time ?? row.created_at ?? row.date,
         usercount: row.usercount ?? row.users ?? row.players ?? row.count,
+        uniquecount: row.uniquecount,
       };
     })
-    .map((row): { date: Date | null; count: number } => ({ date: parseTimestamp(row.timestamp), count: Number(row.usercount) }))
-    .filter((point): point is StatsPoint => point.date instanceof Date && Number.isFinite(point.count))
+    .map((row): { date: Date | null; count: number; uniqueCount: number | null } => {
+      const uniqueCount = row.uniquecount == null ? Number.NaN : Number(row.uniquecount);
+      return {
+        date: parseTimestamp(row.timestamp),
+        count: Number(row.usercount),
+        uniqueCount: Number.isFinite(uniqueCount) && uniqueCount >= 0 ? uniqueCount : null,
+      };
+    })
+    .filter((point): point is { date: Date; count: number; uniqueCount: number | null } => point.date instanceof Date && Number.isFinite(point.count))
     .filter((point) => !isKnownBadPoint(point))
-    .map((point): StatsPoint => ({ date: truncateDateToSecond(point.date) as Date, count: point.count }))
+    .map((point): StatsPoint => ({ date: truncateDateToSecond(point.date) as Date, count: point.count, uniqueCount: point.uniqueCount }))
     .sort((a, b) => a.date.getTime() - b.date.getTime());
   const byTimestamp = new Map<number, StatsPoint>();
   normalized.forEach((point) => byTimestamp.set(point.date.getTime(), point));
@@ -196,6 +207,10 @@ function truncateDateToSecond(date: Date | null): Date | null {
 
 function formatInteger(value: number): string {
   return Number.isFinite(value) ? Math.round(value).toLocaleString(getCurrentLocale()) : "--";
+}
+
+function isNonnegativeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) >= 0;
 }
 
 function formatTime(date: Date): string {
@@ -299,9 +314,12 @@ function updateHistoricalMetrics(points: StatsPoint[], source: string, sourceUrl
   const latest = points[points.length - 1];
   const peak = visible.length > 0 ? Math.max(...visible.map((point) => point.count)) : Number.NaN;
   const avg = visible.length > 0 ? visible.reduce((total, point) => total + point.count, 0) / visible.length : Number.NaN;
+  const uniqueSummary = summarizeUniqueCounts(visible);
 
   elements.peak.textContent = formatInteger(peak);
+  elements.peakUnique.textContent = formatInteger(uniqueSummary.peak);
   elements.average.textContent = formatInteger(avg);
+  elements.averageUnique.textContent = formatInteger(uniqueSummary.average);
   elements.lastSample.textContent = latest ? formatTime(latest.date) : "--";
   elements.sampleCount.textContent = formatLocaleNumber(points.length);
   setSourceLabel(source, sourceUrl);
@@ -310,7 +328,9 @@ function updateHistoricalMetrics(points: StatsPoint[], source: string, sourceUrl
 
 function clearHistoricalMetrics(source: string): void {
   elements.peak.textContent = "--";
+  elements.peakUnique.textContent = "--";
   elements.average.textContent = "--";
+  elements.averageUnique.textContent = "--";
   elements.lastSample.textContent = "--";
   elements.sampleCount.textContent = "0";
   elements.rangeLabel.textContent = "--";
@@ -319,6 +339,16 @@ function clearHistoricalMetrics(source: string): void {
 
 function average(values: number[]): number {
   return values.length > 0 ? values.reduce((total, value) => total + value, 0) / values.length : Number.NaN;
+}
+
+function summarizeUniqueCounts(points: StatsPoint[]): { peak: number; average: number } {
+  const counts = points
+    .map((point) => point.uniqueCount)
+    .filter((count): count is number => typeof count === "number" && Number.isFinite(count));
+  return {
+    peak: counts.length > 0 ? Math.max(...counts) : Number.NaN,
+    average: average(counts),
+  };
 }
 
 function percentile(values: number[], percentileRank: number): number {
@@ -619,10 +649,11 @@ async function fetchHistoricalStats(): Promise<void> {
 async function fetchCurrentUserCount(): Promise<void> {
   const response = await fetch("/api/current", { headers: { Accept: "application/json" } });
   if (!response.ok) throw new Error(tr("error.currentUserRequestFailed", { status: response.status }));
-  const payload = await response.json() as { usercount?: unknown };
-  const usercount = Number(payload.usercount);
-  if (!Number.isFinite(usercount)) throw new Error(tr("error.currentUserMissingCount"));
+  const payload = await response.json() as { usercount?: unknown; uniquecount?: unknown };
+  const { usercount, uniquecount } = payload;
+  if (!isNonnegativeInteger(usercount) || !isNonnegativeInteger(uniquecount)) throw new Error(tr("error.currentUserMissingCount"));
   elements.current.textContent = formatInteger(usercount);
+  elements.currentUnique.textContent = formatInteger(uniquecount);
 }
 
 async function loadStats(): Promise<void> {
@@ -642,6 +673,7 @@ async function loadStats(): Promise<void> {
   if (currentResult.status === "rejected") {
     console.warn(currentResult.reason);
     if (elements.current.textContent === "") elements.current.textContent = "--";
+    if (elements.currentUnique.textContent === "") elements.currentUnique.textContent = "--";
   }
   render();
 }
@@ -678,6 +710,7 @@ function initApp(): void {
 
 const testApi = {
   normalizePayload,
+  summarizeUniqueCounts,
   isKnownBadPoint,
   formatTime,
   formatTimelineAxisLabel,
@@ -696,4 +729,4 @@ const testApi = {
 
 globalThis.__MUSHMOM_TEST__ = testApi;
 
-export { initApp, normalizePayload, isKnownBadPoint, formatTime, formatTimelineAxisLabel, formatWeekdayLabels, formatBucketRange, getHeatmapVisualBounds, getHeatmapPercentileRanks, buildDistributionBuckets, buildBucketSummaries, buildTimelineOptions, buildHeatmapOptions, buildDistributionOptions, testApi };
+export { initApp, normalizePayload, summarizeUniqueCounts, isKnownBadPoint, formatTime, formatTimelineAxisLabel, formatWeekdayLabels, formatBucketRange, getHeatmapVisualBounds, getHeatmapPercentileRanks, buildDistributionBuckets, buildBucketSummaries, buildTimelineOptions, buildHeatmapOptions, buildDistributionOptions, testApi };
