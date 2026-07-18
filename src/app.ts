@@ -2,10 +2,10 @@
 
 type ChartRange = "24h" | "7d" | "28d" | "90d" | "180d" | "ytd" | "1y" | "3y" | "all";
 type ChartKind = "timeline" | "heatmap" | "distribution";
-type ChartMetric = "players" | "uniqueIp";
+type ChartMetric = "characters" | "players";
 type BucketUnit = "hour" | "day" | "week";
 
-type MetricElementKey = "current" | "currentUnique" | "peak" | "peakUnique" | "average" | "averageUnique" | "lastSample" | "sampleCount" | "rangeLabel" | "sourceLabel";
+type MetricElementKey = "currentCharacters" | "currentPlayers" | "peakCharacters" | "peakPlayers" | "averageCharacters" | "averagePlayers" | "lastSample" | "sampleCount" | "rangeLabel" | "sourceLabel";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
@@ -66,19 +66,19 @@ const HEATMAP_COLORS = [
   "#c62828",
 ];
 const DISTRIBUTION_BAR_COLOR = "#f1c44f";
-const UNIQUE_COLOR = "#55b6e8";
-const UNIQUE_RANGE_COLOR = "rgba(85, 182, 232, 0.18)";
+const PLAYER_COLOR = "#55b6e8";
+const PLAYER_RANGE_COLOR = "rgba(85, 182, 232, 0.18)";
 const DISTRIBUTION_STEP = 100;
 const KNOWN_BAD_GAP_START = Date.parse("2020-06-15T15:30:55.664Z");
 const KNOWN_BAD_GAP_END = Date.parse("2020-06-22T01:00:00.528Z");
 
 const elements: Record<MetricElementKey, HTMLElement> = {
-  current: requireElement("#current-count"),
-  currentUnique: requireElement("#current-unique-count"),
-  peak: requireElement("#peak-count"),
-  peakUnique: requireElement("#peak-unique-count"),
-  average: requireElement("#average-count"),
-  averageUnique: requireElement("#average-unique-count"),
+  currentCharacters: requireElement("#current-character-count"),
+  currentPlayers: requireElement("#current-player-count"),
+  peakCharacters: requireElement("#peak-character-count"),
+  peakPlayers: requireElement("#peak-player-count"),
+  averageCharacters: requireElement("#average-character-count"),
+  averagePlayers: requireElement("#average-player-count"),
   lastSample: requireElement("#last-sample"),
   sampleCount: requireElement("#sample-count"),
   rangeLabel: requireElement("#range-label"),
@@ -88,7 +88,7 @@ const elements: Record<MetricElementKey, HTMLElement> = {
 let allPoints: StatsPoint[] = [];
 let currentRange: ChartRange = "7d";
 let activeChart: ChartKind = "timeline";
-let activeMetric: ChartMetric = "players";
+let activeMetric: ChartMetric = "characters";
 let chart: EChartsInstance | null = null;
 let historicalSource: HistoricalSource = { name: "Unknown", url: null };
 let currentStatus: CurrentStatus = { kind: "loading", key: "status.loading", params: {} };
@@ -172,7 +172,7 @@ function parseTimestamp(value: unknown): Date | null {
 
 function isKnownBadPoint(point: StatsPoint): boolean {
   const time = point.date?.getTime();
-  return !Number.isFinite(time) || (time >= KNOWN_BAD_GAP_START && time < KNOWN_BAD_GAP_END) || point.count < 0;
+  return !Number.isFinite(time) || (time >= KNOWN_BAD_GAP_START && time < KNOWN_BAD_GAP_END) || point.characterCount < 0;
 }
 
 function normalizePayload(payload: StatsPayload): StatsPoint[] {
@@ -190,17 +190,17 @@ function normalizePayload(payload: StatsPayload): StatsPoint[] {
         uniquecount: row.uniquecount,
       };
     })
-    .map((row): { date: Date | null; count: number; uniqueCount: number | null } => {
-      const uniqueCount = row.uniquecount == null ? Number.NaN : Number(row.uniquecount);
+    .map((row): { date: Date | null; characterCount: number; playerCount: number | null } => {
+      const playerCount = row.uniquecount == null ? Number.NaN : Number(row.uniquecount);
       return {
         date: parseTimestamp(row.timestamp),
-        count: Number(row.usercount),
-        uniqueCount: Number.isFinite(uniqueCount) && uniqueCount >= 0 ? uniqueCount : null,
+        characterCount: Number(row.usercount),
+        playerCount: Number.isFinite(playerCount) && playerCount >= 0 ? playerCount : null,
       };
     })
-    .filter((point): point is { date: Date; count: number; uniqueCount: number | null } => point.date instanceof Date && Number.isFinite(point.count))
+    .filter((point): point is { date: Date; characterCount: number; playerCount: number | null } => point.date instanceof Date && Number.isFinite(point.characterCount))
     .filter((point) => !isKnownBadPoint(point))
-    .map((point): StatsPoint => ({ date: truncateDateToSecond(point.date) as Date, count: point.count, uniqueCount: point.uniqueCount }))
+    .map((point): StatsPoint => ({ date: truncateDateToSecond(point.date) as Date, characterCount: point.characterCount, playerCount: point.playerCount }))
     .sort((a, b) => a.date.getTime() - b.date.getTime());
   const byTimestamp = new Map<number, StatsPoint>();
   normalized.forEach((point) => byTimestamp.set(point.date.getTime(), point));
@@ -318,14 +318,14 @@ function setSourceLabel(source: string, sourceUrl: string | null = null): void {
 function updateHistoricalMetrics(points: StatsPoint[], source: string, sourceUrl: string | null = null): void {
   const visible = pointsForRange(points, "24h");
   const latest = points[points.length - 1];
-  const peak = visible.length > 0 ? Math.max(...visible.map((point) => point.count)) : Number.NaN;
-  const avg = visible.length > 0 ? visible.reduce((total, point) => total + point.count, 0) / visible.length : Number.NaN;
-  const uniqueSummary = summarizeUniqueCounts(visible);
+  const peak = visible.length > 0 ? Math.max(...visible.map((point) => point.characterCount)) : Number.NaN;
+  const avg = visible.length > 0 ? visible.reduce((total, point) => total + point.characterCount, 0) / visible.length : Number.NaN;
+  const playerSummary = summarizePlayerCounts(visible);
 
-  elements.peak.textContent = formatInteger(peak);
-  elements.peakUnique.textContent = formatInteger(uniqueSummary.peak);
-  elements.average.textContent = formatInteger(avg);
-  elements.averageUnique.textContent = formatInteger(uniqueSummary.average);
+  elements.peakCharacters.textContent = formatInteger(peak);
+  elements.peakPlayers.textContent = formatInteger(playerSummary.peak);
+  elements.averageCharacters.textContent = formatInteger(avg);
+  elements.averagePlayers.textContent = formatInteger(playerSummary.average);
   elements.lastSample.textContent = latest ? formatTime(latest.date) : "--";
   elements.sampleCount.textContent = formatLocaleNumber(points.length);
   setSourceLabel(source, sourceUrl);
@@ -333,10 +333,10 @@ function updateHistoricalMetrics(points: StatsPoint[], source: string, sourceUrl
 }
 
 function clearHistoricalMetrics(source: string): void {
-  elements.peak.textContent = "--";
-  elements.peakUnique.textContent = "--";
-  elements.average.textContent = "--";
-  elements.averageUnique.textContent = "--";
+  elements.peakCharacters.textContent = "--";
+  elements.peakPlayers.textContent = "--";
+  elements.averageCharacters.textContent = "--";
+  elements.averagePlayers.textContent = "--";
   elements.lastSample.textContent = "--";
   elements.sampleCount.textContent = "0";
   elements.rangeLabel.textContent = "--";
@@ -347,9 +347,9 @@ function average(values: number[]): number {
   return values.length > 0 ? values.reduce((total, value) => total + value, 0) / values.length : Number.NaN;
 }
 
-function summarizeUniqueCounts(points: StatsPoint[]): { peak: number; average: number } {
+function summarizePlayerCounts(points: StatsPoint[]): { peak: number; average: number } {
   const counts = points
-    .map((point) => point.uniqueCount)
+    .map((point) => point.playerCount)
     .filter((count): count is number => typeof count === "number" && Number.isFinite(count));
   return {
     peak: counts.length > 0 ? Math.max(...counts) : Number.NaN,
@@ -402,23 +402,23 @@ function formatPercentage(value: number): string {
 }
 
 const TIMELINE_RANGE_CONFIG: Record<Exclude<ChartRange, "24h" | "ytd">, TimelineConfig> = {
-  "7d": { labelKey: "chart.series.players" },
-  "28d": { labelKey: "chart.series.averagePlayersBucket", bucketKey: "bucket.4h", unit: "hour", size: 4 },
-  "90d": { labelKey: "chart.series.averagePlayersBucket", bucketKey: "bucket.12h", unit: "hour", size: 12 },
-  "180d": { labelKey: "chart.series.averagePlayersBucket", bucketKey: "bucket.1d", unit: "day", size: 1 },
-  "1y": { labelKey: "chart.series.averagePlayersBucket", bucketKey: "bucket.48h", unit: "day", size: 2 },
-  "3y": { labelKey: "chart.series.averagePlayersBucket", bucketKey: "bucket.1w", unit: "week", size: 1 },
-  all: { labelKey: "chart.series.averagePlayersBucket", bucketKey: "bucket.1w", unit: "week", size: 1 },
+  "7d": { labelKey: "chart.series.characters" },
+  "28d": { labelKey: "chart.series.averageCharactersBucket", bucketKey: "bucket.4h", unit: "hour", size: 4 },
+  "90d": { labelKey: "chart.series.averageCharactersBucket", bucketKey: "bucket.12h", unit: "hour", size: 12 },
+  "180d": { labelKey: "chart.series.averageCharactersBucket", bucketKey: "bucket.1d", unit: "day", size: 1 },
+  "1y": { labelKey: "chart.series.averageCharactersBucket", bucketKey: "bucket.48h", unit: "day", size: 2 },
+  "3y": { labelKey: "chart.series.averageCharactersBucket", bucketKey: "bucket.1w", unit: "week", size: 1 },
+  all: { labelKey: "chart.series.averageCharactersBucket", bucketKey: "bucket.1w", unit: "week", size: 1 },
 };
 
 function getSeriesLabel(config: TimelineConfig): string {
   return config.bucketKey ? tr(config.labelKey, { bucket: tr(config.bucketKey) }) : tr(config.labelKey);
 }
 
-function getUniqueSeriesLabel(config: TimelineConfig): string {
+function getPlayerSeriesLabel(config: TimelineConfig): string {
   return config.bucketKey
-    ? tr("chart.series.averageUniqueIpBucket", { bucket: tr(config.bucketKey) })
-    : tr("metric.uniqueIp");
+    ? tr("chart.series.averagePlayersBucket", { bucket: tr(config.bucketKey) })
+    : tr("metric.players");
 }
 
 const RANGE_WINDOW_MS: Record<Exclude<ChartRange, "all" | "ytd">, number> = {
@@ -464,7 +464,7 @@ function bucketStart(timestamp: number, config: { unit: BucketUnit; size: number
 function buildBucketSummaries(
   points: StatsPoint[],
   config: { unit: BucketUnit; size: number },
-  valueSelector: (point: StatsPoint) => number | null | undefined = (point) => point.count,
+  valueSelector: (point: StatsPoint) => number | null | undefined = (point) => point.characterCount,
 ): BucketSummary[] {
   const buckets = new Map<number, BucketAccumulator>();
   points.forEach((point) => {
@@ -525,22 +525,22 @@ function baseAxisOption() {
 function buildTimelineOptions(points: StatsPoint[]) {
   const visible = pointsForRange(points, currentRange);
   const config = getTimelineConfig(currentRange, visible);
-  const playerValues = visible.map((point) => [point.date.getTime(), point.count]);
-  const uniqueSampleCount = visible.filter((point) => typeof point.uniqueCount === "number" && Number.isFinite(point.uniqueCount)).length;
-  const uniqueValues = visible.map((point) => [
+  const characterValues = visible.map((point) => [point.date.getTime(), point.characterCount]);
+  const playerSampleCount = visible.filter((point) => typeof point.playerCount === "number" && Number.isFinite(point.playerCount)).length;
+  const playerValues = visible.map((point) => [
     point.date.getTime(),
-    typeof point.uniqueCount === "number" && Number.isFinite(point.uniqueCount) ? point.uniqueCount : null,
+    typeof point.playerCount === "number" && Number.isFinite(point.playerCount) ? point.playerCount : null,
   ]);
   const bucketed = config.unit != null && config.size != null;
   const bucketConfig = { unit: config.unit as BucketUnit, size: config.size as number };
-  const playerBuckets = bucketed ? buildBucketSummaries(visible, bucketConfig) : [];
-  const uniqueBuckets = bucketed ? buildBucketSummaries(visible, bucketConfig, (point) => point.uniqueCount) : [];
+  const characterBuckets = bucketed ? buildBucketSummaries(visible, bucketConfig) : [];
+  const playerBuckets = bucketed ? buildBucketSummaries(visible, bucketConfig, (point) => point.playerCount) : [];
+  const characterBucketMap = new Map(characterBuckets.map((bucket) => [bucket.time, bucket]));
   const playerBucketMap = new Map(playerBuckets.map((bucket) => [bucket.time, bucket]));
-  const uniqueBucketMap = new Map(uniqueBuckets.map((bucket) => [bucket.time, bucket]));
-  const bucketMax = Math.max(0, ...playerBuckets.map((bucket) => bucket.max), ...uniqueBuckets.map((bucket) => bucket.max));
-  const uniqueBucketTimes = playerBuckets.map((bucket) => bucket.time);
-  const playerName = getSeriesLabel(config);
-  const uniqueName = getUniqueSeriesLabel(config);
+  const bucketMax = Math.max(0, ...characterBuckets.map((bucket) => bucket.max), ...playerBuckets.map((bucket) => bucket.max));
+  const playerBucketTimes = characterBuckets.map((bucket) => bucket.time);
+  const characterName = getSeriesLabel(config);
+  const playerName = getPlayerSeriesLabel(config);
   const summaryRows = (label: string, bucket: BucketSummary): string[] => [
     `<strong>${label}</strong>`,
     `${tr("chart.tooltip.avg")}: ${formatInteger(bucket.avg)}`,
@@ -559,40 +559,40 @@ function buildTimelineOptions(points: StatsPoint[]) {
       formatter: (params: Array<{ axisValue?: number | string }>) => {
         const time = Number(params[0]?.axisValue);
         if (!Number.isFinite(time)) return "";
+        const characterBucket = characterBucketMap.get(time);
         const playerBucket = playerBucketMap.get(time);
-        const uniqueBucket = uniqueBucketMap.get(time);
-        if (!playerBucket && !uniqueBucket) return "";
+        if (!characterBucket && !playerBucket) return "";
         const rows = [`<strong>${formatBucketRange(time, bucketConfig)}</strong>`];
-        if (playerBucket) rows.push(...summaryRows(tr("chart.series.players"), playerBucket));
-        if (uniqueBucket) rows.push(...summaryRows(tr("metric.uniqueIp"), uniqueBucket));
+        if (characterBucket) rows.push(...summaryRows(tr("chart.series.characters"), characterBucket));
+        if (playerBucket) rows.push(...summaryRows(tr("metric.players"), playerBucket));
         return rows.join("<br />");
       },
     } : { trigger: "axis", backgroundColor: "#22292a", borderColor: "#35403e", textStyle: { color: "#f4f1e8" }, valueFormatter: (value: number | string) => Number.isFinite(Number(value)) ? formatLocaleNumber(Number(value)) : value },
-    legend: { top: 8, data: [playerName, uniqueName], selectedMode: false, textStyle: { color: "#a9b1ad" } },
+    legend: { top: 8, data: [characterName, playerName], selectedMode: false, textStyle: { color: "#a9b1ad" } },
     grid: { left: 52, right: 24, top: 54, bottom: 76 },
     xAxis: { type: "time", axisLine: { lineStyle: { color: "#35403e" } }, axisLabel: { color: "#a9b1ad", formatter: (value: number) => formatTimelineAxisLabel(value, currentRange) }, splitLine: { show: false } },
     yAxis: { type: "value", min: 0, max: bucketed && bucketMax > 0 ? Math.ceil(bucketMax * 1.03) : undefined, axisLabel: { color: "#a9b1ad" }, splitLine: { lineStyle: { color: "rgba(169, 177, 173, 0.14)" } } },
     dataZoom: [{ type: "inside", throttle: 80 }, { type: "slider", height: 24, bottom: 16, borderColor: "#35403e", fillerColor: "rgba(125, 216, 125, 0.18)", handleStyle: { color: "#7dd87d" }, textStyle: { color: "#a9b1ad" } }],
     series: bucketed ? [
-      { id: "player-range-base", type: "line", stack: "player-range", data: playerBuckets.map((bucket) => [bucket.time, bucket.min]), symbol: "none", lineStyle: { opacity: 0 }, itemStyle: { opacity: 0 }, areaStyle: { opacity: 0 }, silent: true, tooltip: { show: false } },
-      { id: "player-range-spread", type: "line", stack: "player-range", data: playerBuckets.map((bucket) => [bucket.time, bucket.max - bucket.min]), symbol: "none", lineStyle: { opacity: 0 }, areaStyle: { color: "rgba(125, 216, 125, 0.16)" }, silent: true, tooltip: { show: false } },
-      { id: "player-average", name: playerName, type: "line", smooth: true, showSymbol: playerBuckets.length < 80, symbolSize: 7, lineStyle: { width: 3, color: "#7dd87d" }, itemStyle: { color: "#f1c44f" }, data: playerBuckets.map((bucket) => [bucket.time, Math.round(bucket.avg)]), z: 3 },
-      { id: "unique-range-base", type: "line", stack: "unique-range", data: uniqueBucketTimes.map((time) => [time, uniqueBucketMap.get(time)?.min ?? null]), symbol: "none", connectNulls: false, lineStyle: { opacity: 0 }, itemStyle: { opacity: 0 }, areaStyle: { opacity: 0 }, silent: true, tooltip: { show: false } },
-      { id: "unique-range-spread", type: "line", stack: "unique-range", data: uniqueBucketTimes.map((time) => { const bucket = uniqueBucketMap.get(time); return [time, bucket ? bucket.max - bucket.min : null]; }), symbol: "none", connectNulls: false, lineStyle: { opacity: 0 }, areaStyle: { color: UNIQUE_RANGE_COLOR }, silent: true, tooltip: { show: false } },
-      { id: "unique-average", name: uniqueName, type: "line", smooth: true, connectNulls: false, showSymbol: uniqueBuckets.length < 80, symbolSize: 7, lineStyle: { width: 3, color: UNIQUE_COLOR }, itemStyle: { color: UNIQUE_COLOR }, data: uniqueBucketTimes.map((time) => [time, uniqueBucketMap.has(time) ? Math.round(uniqueBucketMap.get(time)!.avg) : null]), z: 4 },
+      { id: "character-range-base", type: "line", stack: "character-range", data: characterBuckets.map((bucket) => [bucket.time, bucket.min]), symbol: "none", lineStyle: { opacity: 0 }, itemStyle: { opacity: 0 }, areaStyle: { opacity: 0 }, silent: true, tooltip: { show: false } },
+      { id: "character-range-spread", type: "line", stack: "character-range", data: characterBuckets.map((bucket) => [bucket.time, bucket.max - bucket.min]), symbol: "none", lineStyle: { opacity: 0 }, areaStyle: { color: "rgba(125, 216, 125, 0.16)" }, silent: true, tooltip: { show: false } },
+      { id: "character-average", name: characterName, type: "line", smooth: true, showSymbol: characterBuckets.length < 80, symbolSize: 7, lineStyle: { width: 3, color: "#7dd87d" }, itemStyle: { color: "#f1c44f" }, data: characterBuckets.map((bucket) => [bucket.time, Math.round(bucket.avg)]), z: 3 },
+      { id: "player-range-base", type: "line", stack: "player-range", data: playerBucketTimes.map((time) => [time, playerBucketMap.get(time)?.min ?? null]), symbol: "none", connectNulls: false, lineStyle: { opacity: 0 }, itemStyle: { opacity: 0 }, areaStyle: { opacity: 0 }, silent: true, tooltip: { show: false } },
+      { id: "player-range-spread", type: "line", stack: "player-range", data: playerBucketTimes.map((time) => { const bucket = playerBucketMap.get(time); return [time, bucket ? bucket.max - bucket.min : null]; }), symbol: "none", connectNulls: false, lineStyle: { opacity: 0 }, areaStyle: { color: PLAYER_RANGE_COLOR }, silent: true, tooltip: { show: false } },
+      { id: "player-average", name: playerName, type: "line", smooth: true, connectNulls: false, showSymbol: playerBuckets.length < 80, symbolSize: 7, lineStyle: { width: 3, color: PLAYER_COLOR }, itemStyle: { color: PLAYER_COLOR }, data: playerBucketTimes.map((time) => [time, playerBucketMap.has(time) ? Math.round(playerBucketMap.get(time)!.avg) : null]), z: 4 },
     ] : [
-      { id: "players", name: playerName, type: "line", smooth: false, showSymbol: visible.length < 80, symbolSize: 7, lineStyle: { width: 3, color: "#7dd87d" }, itemStyle: { color: "#f1c44f" }, areaStyle: { color: { type: "linear", x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: "rgba(125, 216, 125, 0.36)" }, { offset: 1, color: "rgba(125, 216, 125, 0.02)" }] } }, data: playerValues },
-      { id: "unique-ip", name: uniqueName, type: "line", smooth: false, connectNulls: false, showSymbol: uniqueSampleCount < 80, symbolSize: 6, lineStyle: { width: 3, color: UNIQUE_COLOR }, itemStyle: { color: UNIQUE_COLOR }, data: uniqueValues, z: 4 },
+      { id: "characters", name: characterName, type: "line", smooth: false, showSymbol: visible.length < 80, symbolSize: 7, lineStyle: { width: 3, color: "#7dd87d" }, itemStyle: { color: "#f1c44f" }, areaStyle: { color: { type: "linear", x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: "rgba(125, 216, 125, 0.36)" }, { offset: 1, color: "rgba(125, 216, 125, 0.02)" }] } }, data: characterValues },
+      { id: "players", name: playerName, type: "line", smooth: false, connectNulls: false, showSymbol: playerSampleCount < 80, symbolSize: 6, lineStyle: { width: 3, color: PLAYER_COLOR }, itemStyle: { color: PLAYER_COLOR }, data: playerValues, z: 4 },
     ],
-    graphic: bucketed ? (playerBuckets.length === 0 ? emptyGraphic() : null) : (playerValues.length === 0 ? emptyGraphic() : null),
+    graphic: bucketed ? (characterBuckets.length === 0 ? emptyGraphic() : null) : (characterValues.length === 0 ? emptyGraphic() : null),
   };
 }
 
 function pointsForMetric(points: StatsPoint[], metric: ChartMetric = activeMetric): StatsPoint[] {
-  if (metric === "players") return points;
+  if (metric === "characters") return points;
   return points
-    .filter((point) => typeof point.uniqueCount === "number" && Number.isFinite(point.uniqueCount))
-    .map((point) => ({ ...point, count: point.uniqueCount as number }));
+    .filter((point) => typeof point.playerCount === "number" && Number.isFinite(point.playerCount))
+    .map((point) => ({ ...point, characterCount: point.playerCount as number }));
 }
 
 function buildHeatmapOptions(points: StatsPoint[]) {
@@ -604,7 +604,7 @@ function buildHeatmapOptions(points: StatsPoint[]) {
   visible.forEach((point) => {
     const key = `${point.date.getDay()}-${point.date.getHours()}`;
     const bucket = buckets.get(key) || [];
-    bucket.push(point.count);
+    bucket.push(point.characterCount);
     buckets.set(key, bucket);
   });
   const values: Array<[number, number, number | null, number, Record<string, number>, number]> = [];
@@ -615,19 +615,19 @@ function buildHeatmapOptions(points: StatsPoint[]) {
     values.push([hour, day, toHeatmapScore(averageCount), averageCount, percentiles, bucket.length]);
   });
   const { min: visualMin, max: visualMax } = getHeatmapVisualBounds();
-  const seriesName = activeMetric === "uniqueIp" ? tr("chart.series.averageUniqueIp") : tr("chart.series.averagePlayers");
-  const emptyText = activeMetric === "uniqueIp" ? tr("ui.noUniqueIpData") : tr("ui.noLiveData");
+  const seriesName = activeMetric === "players" ? tr("chart.series.averagePlayers") : tr("chart.series.averageCharacters");
+  const emptyText = activeMetric === "players" ? tr("ui.noPlayerData") : tr("ui.noLiveData");
   return { animationDuration: 450, backgroundColor: "transparent", tooltip: { position: "top", backgroundColor: "#22292a", borderColor: "#35403e", textStyle: { color: "#f4f1e8" }, formatter: (params: { value: [number, number, number | null, number, Record<string, number>, number] }) => { const [hour, day, , count, percentiles, samples] = params.value; const rows = [`<strong>${weekdayLabels[day]} ${hourLabels[hour]}</strong>`, `${tr("chart.tooltip.avg")}: ${formatInteger(count)}`]; Object.entries(percentiles || {}).forEach(([label, value]) => { rows.push(`${label}: ${formatInteger(value)}`); }); if (percentiles && Object.keys(percentiles).length > 0) rows.push(tr("chart.tooltip.samplesCount", { count: formatLocaleNumber(samples) })); return rows.join("<br />"); } }, grid: { left: 52, right: 24, top: 34, bottom: 88 }, xAxis: { type: "category", data: hourLabels, axisLine: { lineStyle: { color: "#35403e" } }, axisLabel: { color: "#a9b1ad" }, splitArea: { show: true, areaStyle: { color: ["rgba(255,255,255,0.02)", "transparent"] } } }, yAxis: { type: "category", data: weekdayLabels, inverse: true, axisLine: { lineStyle: { color: "#35403e" } }, axisLabel: { color: "#a9b1ad" }, splitArea: { show: true, areaStyle: { color: ["rgba(255,255,255,0.02)", "transparent"] } } }, visualMap: { min: visualMin, max: visualMax, dimension: 2, calculable: true, orient: "horizontal", left: "center", bottom: 18, textStyle: { color: "#a9b1ad" }, inRange: { color: HEATMAP_COLORS }, outOfRange: { color: [HEATMAP_OUTOFRANGE_COLOR] } }, series: [{ name: seriesName, type: "heatmap", data: values, emphasis: { itemStyle: { borderColor: "#f4f1e8", borderWidth: 1 } } }], graphic: values.length === 0 ? emptyGraphic(emptyText) : null };
 }
 
 function buildDistributionOptions(points: StatsPoint[]) {
   const visible = pointsForMetric(pointsForRange(points, currentRange));
-  const counts = visible.map((point) => point.count);
+  const counts = visible.map((point) => point.characterCount);
   const buckets = buildDistributionBuckets(counts);
   const totalSamples = counts.length || 1;
   const percentageData = buckets.map((bucket) => (bucket.count / totalSamples) * 100);
-  const emptyText = activeMetric === "uniqueIp" ? tr("ui.noUniqueIpData") : tr("ui.noLiveData");
-  const barColor = activeMetric === "uniqueIp" ? UNIQUE_COLOR : DISTRIBUTION_BAR_COLOR;
+  const emptyText = activeMetric === "players" ? tr("ui.noPlayerData") : tr("ui.noLiveData");
+  const barColor = activeMetric === "players" ? PLAYER_COLOR : DISTRIBUTION_BAR_COLOR;
   return { ...baseAxisOption(), tooltip: { trigger: "axis", backgroundColor: "#22292a", borderColor: "#35403e", textStyle: { color: "#f4f1e8" }, formatter: (params: Array<{ dataIndex: number; value: number }>) => { const item = params[0]; if (!item) return ""; const bucket = buckets[item.dataIndex]; return [bucket.label, tr("chart.tooltip.ofSamples", { percent: formatPercentage(item.value) }), tr("chart.tooltip.samplesCount", { count: formatLocaleNumber(bucket.count) })].join("<br />"); } }, grid: { left: 52, right: 24, top: 34, bottom: 74 }, xAxis: { type: "category", data: buckets.map((bucket) => bucket.label), axisLine: { lineStyle: { color: "#35403e" } }, axisLabel: { color: "#a9b1ad", rotate: 35 } }, yAxis: { type: "value", axisLabel: { color: "#a9b1ad", formatter: (value: number) => formatPercentage(value) }, splitLine: { lineStyle: { color: "rgba(169, 177, 173, 0.14)" } } }, series: [{ name: tr("chart.series.samplesPercent"), type: "bar", barMaxWidth: 38, itemStyle: { borderRadius: [4, 4, 0, 0], borderColor: "#35403e", borderWidth: 1, color: barColor }, data: percentageData }], graphic: visible.length === 0 ? emptyGraphic(emptyText) : null };
 }
 
@@ -648,7 +648,7 @@ function updateMetricToggle(): void {
 
 function selectChart(chartName: ChartKind): void {
   activeChart = chartName;
-  activeMetric = "players";
+  activeMetric = "characters";
   chartButtons.forEach((button) => button.classList.toggle("is-active", button.dataset.chart === activeChart));
   updateMetricToggle();
 }
@@ -714,20 +714,20 @@ async function fetchHistoricalStats(): Promise<void> {
   });
 }
 
-async function fetchCurrentUserCount(): Promise<void> {
+async function fetchCurrentPopulation(): Promise<void> {
   const response = await fetch("/api/current", { headers: { Accept: "application/json" } });
-  if (!response.ok) throw new Error(tr("error.currentUserRequestFailed", { status: response.status }));
+  if (!response.ok) throw new Error(tr("error.currentPopulationRequestFailed", { status: response.status }));
   const payload = await response.json() as { usercount?: unknown; uniquecount?: unknown };
   const { usercount, uniquecount } = payload;
-  if (!isNonnegativeInteger(usercount) || !isNonnegativeInteger(uniquecount)) throw new Error(tr("error.currentUserMissingCount"));
-  elements.current.textContent = formatInteger(usercount);
-  elements.currentUnique.textContent = formatInteger(uniquecount);
+  if (!isNonnegativeInteger(usercount) || !isNonnegativeInteger(uniquecount)) throw new Error(tr("error.currentPopulationMissingCount"));
+  elements.currentCharacters.textContent = formatInteger(usercount);
+  elements.currentPlayers.textContent = formatInteger(uniquecount);
 }
 
 async function loadStats(): Promise<void> {
   const hadHistoricalData = allPoints.length > 0;
   setStatus("loading", "status.loading");
-  const [statsResult, currentResult] = await Promise.allSettled([fetchHistoricalStats(), fetchCurrentUserCount()]);
+  const [statsResult, currentResult] = await Promise.allSettled([fetchHistoricalStats(), fetchCurrentPopulation()]);
   if (statsResult.status === "fulfilled") {
     setStatus("ready", "status.ready");
   } else {
@@ -740,8 +740,8 @@ async function loadStats(): Promise<void> {
   }
   if (currentResult.status === "rejected") {
     console.warn(currentResult.reason);
-    if (elements.current.textContent === "") elements.current.textContent = "--";
-    if (elements.currentUnique.textContent === "") elements.currentUnique.textContent = "--";
+    if (elements.currentCharacters.textContent === "") elements.currentCharacters.textContent = "--";
+    if (elements.currentPlayers.textContent === "") elements.currentPlayers.textContent = "--";
   }
   render();
 }
@@ -763,7 +763,7 @@ chartButtons.forEach((button) => {
 
 metricButtons.forEach((button) => {
   button.addEventListener("click", () => {
-    selectMetric((button.dataset.metric as ChartMetric) || "players");
+    selectMetric((button.dataset.metric as ChartMetric) || "characters");
     render();
   });
 });
@@ -784,7 +784,7 @@ function initApp(): void {
 
 const testApi = {
   normalizePayload,
-  summarizeUniqueCounts,
+  summarizePlayerCounts,
   isKnownBadPoint,
   formatTime,
   formatTimelineAxisLabel,
@@ -806,4 +806,4 @@ const testApi = {
 
 globalThis.__MUSHMOM_TEST__ = testApi;
 
-export { initApp, normalizePayload, summarizeUniqueCounts, isKnownBadPoint, formatTime, formatTimelineAxisLabel, formatWeekdayLabels, formatBucketRange, getHeatmapVisualBounds, getHeatmapPercentileRanks, buildDistributionBuckets, buildBucketSummaries, buildTimelineOptions, buildHeatmapOptions, buildDistributionOptions, pointsForMetric, testApi };
+export { initApp, normalizePayload, summarizePlayerCounts, isKnownBadPoint, formatTime, formatTimelineAxisLabel, formatWeekdayLabels, formatBucketRange, getHeatmapVisualBounds, getHeatmapPercentileRanks, buildDistributionBuckets, buildBucketSummaries, buildTimelineOptions, buildHeatmapOptions, buildDistributionOptions, pointsForMetric, testApi };

@@ -7,7 +7,7 @@ afterEach(() => {
 });
 
 describe("current users function", () => {
-  it("returns both total and unique online-user counts", async () => {
+  it("preserves character and estimated-player counts in the compatibility payload", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
       usercount: 2054,
       uniquecount: 1031,

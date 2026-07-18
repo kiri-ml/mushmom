@@ -6,7 +6,7 @@ statistics. The frontend is built with Vite, Cloudflare Pages Functions live in
 
 The app fetches:
 - recent historical data through `/api/stats/YYYY-MM` plus archived chunks from `public/assets/stats/`
-- current online users through `/api/current`
+- current population through `/api/current`
 - bundled translations from `src/i18n/*.json`
 
 It visualizes the time series with Apache ECharts.
@@ -30,7 +30,10 @@ It also accepts compact array rows such as:
 
 Epoch-second rows are also supported.
 
-New observations include the upstream unique-user count as a third value:
+For compatibility, the stored field names retain their upstream terminology:
+`usercount` is the number of online characters (concurrent game clients), while
+`uniquecount` is the estimated number of players identified by IP. New
+observations include that player estimate as a third value:
 
 ```json
 [1782864000, 2054, 1031]
@@ -122,6 +125,10 @@ the zero-padded UTC format, for example `/api/stats/2026-07`. Successful
 responses are JSON arrays of legacy `[epochSeconds, usercount]` or new
 `[epochSeconds, usercount, uniquecount]` rows in ascending order. Each month is
 stored as `stats/jsonl/YYYY-MM.jsonl`; a month with no object returns `[]`.
+
+In these wire-format rows, `usercount` stores online characters and
+`uniquecount` stores estimated players identified by IP. These field names and
+their tuple ordering are preserved for API and archive compatibility.
 
 The stats Worker upserts each scheduled observation into the current monthly
 object. If the object does not exist, the Worker creates it from that

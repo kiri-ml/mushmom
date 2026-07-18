@@ -37,6 +37,9 @@ Schema v2 defines deterministic manifests and archive chunks for the
 - `format.rowShape` MUST equal `["epochSeconds", "usercount"]` for an
   existing legacy manifest or `["epochSeconds", "usercount", "uniquecount?"]`
   for a newly generated manifest.
+- The compatibility name `usercount` stores the number of online characters.
+  The compatibility name `uniquecount` stores the estimated number of players,
+  identified by IP. Their names and tuple positions MUST remain unchanged.
 - `format.timestampUnit` MUST equal `seconds`.
 - `format.order` MUST equal `ascending`.
 - `chunks` MUST be ordered newest-first and MUST NOT overlap.
@@ -87,12 +90,13 @@ observations do not produce empty chunk files.
 - `schemaVersion` MUST equal `2`.
 - `period` MUST match its manifest entry.
 - Each row MUST contain two or three nonnegative integers: an epoch timestamp
-  in UTC seconds, a user count, and an optional unique-user count. Two- and
-  three-value rows MAY coexist in the same chunk. A missing unique-user count
-  means unavailable and MUST NOT imply zero.
+  in UTC seconds, an online-character count (`usercount`), and an optional
+  estimated-player count identified by IP (`uniquecount`). Two- and
+  three-value rows MAY coexist in the same chunk. A missing estimated-player
+  count means unavailable and MUST NOT imply zero.
 - Timestamps MUST be unique and strictly ascending.
 - Missing timestamps represent missing observations and MUST NOT imply a zero
-  user count.
+  character count.
 - `minTimestamp`, `maxTimestamp`, and `rowCount` in the manifest MUST match the
   chunk contents.
 

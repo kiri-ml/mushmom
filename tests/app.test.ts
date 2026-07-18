@@ -312,11 +312,12 @@ describe("vite migration", () => {
     expect(transformed.indexOf(currentPreload)).toBeLessThan(transformed.indexOf(script));
     expect(transformed.indexOf(script)).toBeLessThan(transformed.indexOf('<script type="module" src="/src/main.ts"></script>'));
     expect(indexHtml).not.toContain("echarts@6.1.0");
-    expect(indexHtml).toContain('id="current-unique-count"');
-    expect(indexHtml).toContain('id="peak-unique-count"');
-    expect(indexHtml).toContain('id="average-unique-count"');
-    expect(indexHtml).toContain('data-metric="players" aria-pressed="true"');
-    expect(indexHtml).toContain('data-metric="uniqueIp" aria-pressed="false"');
+    expect(indexHtml).toContain('id="current-character-count"');
+    expect(indexHtml).toContain('id="current-player-count"');
+    expect(indexHtml).toContain('id="peak-player-count"');
+    expect(indexHtml).toContain('id="average-player-count"');
+    expect(indexHtml).toContain('data-metric="characters" aria-pressed="true"');
+    expect(indexHtml).toContain('data-metric="players" aria-pressed="false"');
   });
 });
 
@@ -434,15 +435,27 @@ describe("bundled i18n", () => {
     expect(localeRegistry.length).toBeGreaterThan(5);
     expect(localeRegistry[0]?.code).toBe("en-US");
     expect(i18nMessages["en-US"]?.["status.loading"]).toBe("LOADING");
-    expect(i18nMessages["en-US"]?.["metric.currentPlayers"]).toBe("Players online");
-    expect(i18nMessages["en-US"]?.["metric.uniqueIp"]).toBe("Unique IP");
-    expect(i18nMessages["zh-Hans"]?.["metric.uniqueIp"]).toBe("独立 IP");
-    expect(i18nMessages["zh-Hant"]?.["metric.uniqueIp"]).toBe("獨立 IP");
+    expect(i18nMessages["en-US"]?.["metric.charactersOnline"]).toBe("Characters online");
+    expect(i18nMessages["en-US"]?.["metric.players"]).toBe("Players");
+    expect(i18nMessages["zh-Hans"]?.["metric.characters"]).toBe("角色");
+    expect(i18nMessages["zh-Hans"]?.["metric.players"]).toBe("玩家");
+    expect(i18nMessages["zh-Hant"]?.["metric.characters"]).toBe("角色");
+    expect(i18nMessages["zh-Hant"]?.["metric.players"]).toBe("玩家");
+    expect(i18nMessages["zh-Hans"]?.["hero.eyebrow"]).toBe("MapleLegends 在线人数追踪器");
+    expect(i18nMessages["zh-Hant"]?.["hero.eyebrow"]).toBe("MapleLegends 線上人數追蹤器");
+    expect(i18nMessages["de-DE"]?.["hero.eyebrow"]).toBe("Tracker der MapleLegends-Onlinezahlen");
+    expect(i18nMessages["ja-JP"]?.["hero.eyebrow"]).toBe("MapleLegends オンライン人数トラッカー");
+    expect(i18nMessages["ko-KR"]?.["hero.eyebrow"]).toBe("MapleLegends 온라인 인원 추적기");
     expect(i18nMessages["zh-Hans"]?.["chartView.heatmap"].length).toBeGreaterThan(0);
     for (const locale of localeRegistry) {
       expect(i18nMessages[locale.code]?.["aria.chartMetric"]?.length).toBeGreaterThan(0);
-      expect(i18nMessages[locale.code]?.["chart.series.averageUniqueIp"]?.length).toBeGreaterThan(0);
-      expect(i18nMessages[locale.code]?.["ui.noUniqueIpData"]?.length).toBeGreaterThan(0);
+      expect(i18nMessages[locale.code]?.["metric.characters"]?.length).toBeGreaterThan(0);
+      expect(i18nMessages[locale.code]?.["metric.players"]?.length).toBeGreaterThan(0);
+      expect(i18nMessages[locale.code]?.["chart.series.averagePlayers"]?.length).toBeGreaterThan(0);
+      expect(i18nMessages[locale.code]?.["ui.noPlayerData"]?.length).toBeGreaterThan(0);
+      expect(i18nMessages[locale.code]?.["error.currentPopulationRequestFailed"]?.length).toBeGreaterThan(0);
+      expect(i18nMessages[locale.code]?.["metric.uniqueIp"]).toBeUndefined();
+      expect(i18nMessages[locale.code]?.["ui.noUniqueIpData"]).toBeUndefined();
     }
   });
 
@@ -478,9 +491,9 @@ describe("app behavior", () => {
     const { module, globals } = await loadAppModule();
     useWindow(globals);
     const points = [
-      { date: new Date(Date.UTC(2026, 3, 24, 12, 0, 0)), count: 1200, uniqueCount: 600 },
-      { date: new Date(Date.UTC(2026, 3, 24, 13, 0, 0)), count: 1250, uniqueCount: 625 },
-      { date: new Date(Date.UTC(2026, 3, 25, 12, 0, 0)), count: 1300 },
+      { date: new Date(Date.UTC(2026, 3, 24, 12, 0, 0)), characterCount: 1200, playerCount: 600 },
+      { date: new Date(Date.UTC(2026, 3, 24, 13, 0, 0)), characterCount: 1250, playerCount: 625 },
+      { date: new Date(Date.UTC(2026, 3, 25, 12, 0, 0)), characterCount: 1300 },
     ];
     module.testApi.setCurrentRangeForTest("7d");
     const rawSeries = module.buildTimelineOptions(points).series as Array<{ smooth?: boolean; type?: string }>;
@@ -492,44 +505,44 @@ describe("app behavior", () => {
     const bucketedSeries = bucketedOptions.series as Array<{ id?: string; smooth?: boolean; type?: string }>;
     expect(bucketedSeries.map((series) => series.type)).toEqual(["line", "line", "line", "line", "line", "line"]);
     expect(bucketedSeries.map((series) => series.id)).toEqual([
+      "character-range-base", "character-range-spread", "character-average",
       "player-range-base", "player-range-spread", "player-average",
-      "unique-range-base", "unique-range-spread", "unique-average",
     ]);
     expect(bucketedSeries[2]?.smooth).toBe(true);
     expect(bucketedSeries[5]?.smooth).toBe(true);
     expect((bucketedSeries[5] as { data: Array<[number, number | null]> }).data.map(([, value]) => value)).toEqual([613, null]);
     expect(bucketedOptions.yAxis.min).toBe(0);
     expect(bucketedOptions.legend.selectedMode).toBe(false);
-    expect(module.buildTimelineOptions([{ date: new Date(Date.UTC(2026, 3, 25)), count: 0, uniqueCount: 0 }]).yAxis.max).toBeUndefined();
+    expect(module.buildTimelineOptions([{ date: new Date(Date.UTC(2026, 3, 25)), characterCount: 0, playerCount: 0 }]).yAxis.max).toBeUndefined();
   });
 
-  it("switches heatmap and distribution to unique-IP samples and resets each view to players", async () => {
+  it("switches heatmap and distribution to player samples and resets each view to characters", async () => {
     const { module } = await loadAppModule();
     const points = [
-      { date: new Date(2026, 0, 1, 0), count: 1200, uniqueCount: 600 },
-      { date: new Date(2026, 0, 1, 1), count: 1400 },
+      { date: new Date(2026, 0, 1, 0), characterCount: 1200, playerCount: 600 },
+      { date: new Date(2026, 0, 1, 1), characterCount: 1400 },
     ];
 
     module.testApi.selectChart("heatmap");
-    expect(module.testApi.getChartStateForTest()).toEqual({ activeChart: "heatmap", activeMetric: "players", metricToggleHidden: false });
-    module.testApi.selectMetric("uniqueIp");
+    expect(module.testApi.getChartStateForTest()).toEqual({ activeChart: "heatmap", activeMetric: "characters", metricToggleHidden: false });
+    module.testApi.selectMetric("players");
     const heatmap = module.buildHeatmapOptions(points);
     expect(heatmap.series[0]?.data).toHaveLength(1);
     expect(heatmap.series[0]?.data[0]?.[3]).toBe(600);
     expect(heatmap.series[0]?.data[0]?.[2]).toBe(12);
 
     module.testApi.selectChart("distribution");
-    expect(module.testApi.getChartStateForTest()).toEqual({ activeChart: "distribution", activeMetric: "players", metricToggleHidden: false });
-    module.testApi.selectMetric("uniqueIp");
+    expect(module.testApi.getChartStateForTest()).toEqual({ activeChart: "distribution", activeMetric: "characters", metricToggleHidden: false });
+    module.testApi.selectMetric("players");
     const distribution = module.buildDistributionOptions(points);
     expect(distribution.xAxis.data).toEqual(["0-99", "100-199", "200-299", "300-399", "400-499", "500-599", "600-600"]);
     expect(distribution.series[0]?.itemStyle.color).toBe("#55b6e8");
 
-    const emptyHeatmap = module.buildHeatmapOptions([{ date: new Date(2026, 0, 1, 0), count: 1200 }]);
-    expect(emptyHeatmap.graphic?.style.text).toBe("No unique IP data");
+    const emptyHeatmap = module.buildHeatmapOptions([{ date: new Date(2026, 0, 1, 0), characterCount: 1200 }]);
+    expect(emptyHeatmap.graphic?.style.text).toBe("No player data");
 
     module.testApi.selectChart("timeline");
-    expect(module.testApi.getChartStateForTest()).toEqual({ activeChart: "timeline", activeMetric: "players", metricToggleHidden: true });
+    expect(module.testApi.getChartStateForTest()).toEqual({ activeChart: "timeline", activeMetric: "characters", metricToggleHidden: true });
   });
 
   it("uses compact bucket ranges in bucket tooltips", async () => {
@@ -544,11 +557,11 @@ describe("app behavior", () => {
   it("aligns weekly bucket summaries to local calendar week boundaries", async () => {
     const { module } = await loadAppModule();
     const buckets = module.buildBucketSummaries([
-      { date: new Date(2024, 11, 29, 12), count: 1200 },
-      { date: new Date(2024, 11, 30, 12), count: 1300 },
-      { date: new Date(2025, 0, 4, 12), count: 1100 },
-      { date: new Date(2025, 0, 5, 12), count: 1400 },
-      { date: new Date(2025, 0, 6, 12), count: 1500 },
+      { date: new Date(2024, 11, 29, 12), characterCount: 1200 },
+      { date: new Date(2024, 11, 30, 12), characterCount: 1300 },
+      { date: new Date(2025, 0, 4, 12), characterCount: 1100 },
+      { date: new Date(2025, 0, 5, 12), characterCount: 1400 },
+      { date: new Date(2025, 0, 6, 12), characterCount: 1500 },
     ], { unit: "week", size: 1 });
     expect(buckets.length).toBe(2);
     expect(buckets[0]).toMatchObject({ min: 1100, max: 1300, samples: 3 });
@@ -569,19 +582,19 @@ describe("app behavior", () => {
       [1776945603, 1459],
       [1776945903, 1500, 750],
     ]);
-    expect(points.map((point) => point.count)).toEqual([1832, 2125, 0, 1, 991, 1459, 1500]);
-    expect(points.map((point) => point.uniqueCount)).toEqual([null, null, null, null, null, null, 750]);
+    expect(points.map((point) => point.characterCount)).toEqual([1832, 2125, 0, 1, 991, 1459, 1500]);
+    expect(points.map((point) => point.playerCount)).toEqual([null, null, null, null, null, null, 750]);
   });
 
-  it("summarizes unique IP only from samples that include it", async () => {
+  it("summarizes players only from samples that include them", async () => {
     const { module } = await loadAppModule();
-    expect(module.summarizeUniqueCounts([
-      { date: new Date(0), count: 1000, uniqueCount: null },
-      { date: new Date(1), count: 1200, uniqueCount: 600 },
-      { date: new Date(2), count: 1400, uniqueCount: 700 },
+    expect(module.summarizePlayerCounts([
+      { date: new Date(0), characterCount: 1000, playerCount: null },
+      { date: new Date(1), characterCount: 1200, playerCount: 600 },
+      { date: new Date(2), characterCount: 1400, playerCount: 700 },
     ])).toEqual({ peak: 700, average: 650 });
 
-    const missing = module.summarizeUniqueCounts([{ date: new Date(0), count: 1000 }]);
+    const missing = module.summarizePlayerCounts([{ date: new Date(0), characterCount: 1000 }]);
     expect(Number.isNaN(missing.peak)).toBe(true);
     expect(Number.isNaN(missing.average)).toBe(true);
   });
@@ -614,10 +627,10 @@ describe("app behavior", () => {
     useWindow(globals);
     module.testApi.setCurrentRangeForTest("7d");
     const options = module.buildHeatmapOptions([
-      { date: new Date(2026, 0, 1, 0), count: 2000 },
-      { date: new Date(2026, 0, 1, 1), count: 2200 },
-      { date: new Date(2026, 0, 1, 2), count: 2400 },
-      { date: new Date(2026, 0, 1, 3), count: 2600 },
+      { date: new Date(2026, 0, 1, 0), characterCount: 2000 },
+      { date: new Date(2026, 0, 1, 1), characterCount: 2200 },
+      { date: new Date(2026, 0, 1, 2), characterCount: 2400 },
+      { date: new Date(2026, 0, 1, 3), characterCount: 2600 },
     ]);
     const heatmapData = (options.series[0]?.data || []) as Array<[number, number, number | null, number, Record<string, number>, number]>;
     const scoresByCount = new Map(heatmapData.map(([, , score, count]) => [count, score]));

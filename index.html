@@ -5,10 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       name="description"
-      content="MapleLegends online player counts over time."
+      content="MapleLegends population over time."
       data-i18n-content="meta.description"
     />
-    <title data-i18n="meta.title">Mushmom | MapleLegends Player Count</title>
+    <title data-i18n="meta.title">Mushmom | MapleLegends Population Tracker</title>
     <link rel="icon" href="/assets/icons/favicon.ico" sizes="any" />
     <link rel="icon" type="image/png" href="/assets/icons/favicon.png" sizes="64x64" />
     <link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png" sizes="180x180" />
@@ -18,7 +18,7 @@
     <main class="app-shell">
       <section class="hero" aria-labelledby="page-title">
         <div class="hero-copy">
-          <p class="eyebrow" data-i18n="hero.eyebrow">MapleLegends player count tracker</p>
+          <p class="eyebrow" data-i18n="hero.eyebrow">MapleLegends population tracker</p>
           <div class="title-lockup">
             <h1 id="page-title" data-i18n="app.name">Mushmom</h1>
             <img
@@ -31,7 +31,7 @@
             />
           </div>
           <p class="lede">
-            <span data-i18n="hero.lede.prefix">MapleLegends online player counts over time, inspired by</span>
+            <span data-i18n="hero.lede.prefix">MapleLegends population over time, inspired by</span>
             <a href="https://geospiza.me/ml-online/">geospiza</a><span data-i18n="hero.lede.suffix">.</span>
           </p>
         </div>
@@ -59,19 +59,19 @@
         data-i18n-aria-label="aria.latestMetrics"
       >
         <article class="metric-card">
-          <span data-i18n="metric.currentPlayers">Players online</span>
-          <strong id="current-count">--</strong>
-          <p class="metric-secondary"><span id="current-unique-count" class="metric-secondary-value">--</span><span class="metric-secondary-label" data-i18n="metric.uniqueIp">Unique IP</span></p>
+          <span data-i18n="metric.charactersOnline">Characters online</span>
+          <strong id="current-character-count">--</strong>
+          <p class="metric-secondary"><span id="current-player-count" class="metric-secondary-value">--</span><span class="metric-secondary-label" data-i18n="metric.players">Players</span></p>
         </article>
         <article class="metric-card">
           <span data-i18n="metric.peak24h">24h peak</span>
-          <strong id="peak-count">--</strong>
-          <p class="metric-secondary"><span id="peak-unique-count" class="metric-secondary-value">--</span><span class="metric-secondary-label" data-i18n="metric.uniqueIp">Unique IP</span></p>
+          <strong id="peak-character-count">--</strong>
+          <p class="metric-secondary"><span id="peak-player-count" class="metric-secondary-value">--</span><span class="metric-secondary-label" data-i18n="metric.players">Players</span></p>
         </article>
         <article class="metric-card">
           <span data-i18n="metric.average24h">24h average</span>
-          <strong id="average-count">--</strong>
-          <p class="metric-secondary"><span id="average-unique-count" class="metric-secondary-value">--</span><span class="metric-secondary-label" data-i18n="metric.uniqueIp">Unique IP</span></p>
+          <strong id="average-character-count">--</strong>
+          <p class="metric-secondary"><span id="average-player-count" class="metric-secondary-value">--</span><span class="metric-secondary-label" data-i18n="metric.players">Players</span></p>
         </article>
         <article class="metric-card">
           <span data-i18n="metric.lastSample">Last sample</span>
@@ -92,8 +92,8 @@
         </div>
         <div class="chart-controls">
           <div id="metric-toggle" class="metric-toggle" role="group" aria-label="Chart metric" data-i18n-aria-label="aria.chartMetric" hidden>
-            <button type="button" class="is-active" data-metric="players" aria-pressed="true" data-i18n="metric.players">Players</button>
-            <button type="button" data-metric="uniqueIp" aria-pressed="false" data-i18n="metric.uniqueIp">Unique IP</button>
+            <button type="button" class="is-active" data-metric="characters" aria-pressed="true" data-i18n="metric.characters">Characters</button>
+            <button type="button" data-metric="players" aria-pressed="false" data-i18n="metric.players">Players</button>
           </div>
           <nav class="chart-tabs" aria-label="Chart views" data-i18n-aria-label="aria.chartViews">
             <button type="button" class="is-active" data-chart="timeline" data-i18n="chartView.timeline">Timeline</button>
@@ -105,14 +105,14 @@
 
       <section
         class="chart-section"
-        aria-label="Player count chart"
-        data-i18n-aria-label="aria.playerCountChart"
+        aria-label="Population chart"
+        data-i18n-aria-label="aria.populationChart"
       >
         <div
           id="population-chart"
           class="chart"
           role="img"
-          aria-label="MapleLegends player count over time"
+          aria-label="MapleLegends population over time"
           data-i18n-aria-label="aria.populationChartImage"
         ></div>
       </section>

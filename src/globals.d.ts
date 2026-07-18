@@ -1,5 +1,5 @@
 type SharedTranslationParams = Record<string, string | number>;
-interface StatsPoint { date: Date; count: number; uniqueCount?: number | null; }
+interface StatsPoint { date: Date; characterCount: number; playerCount?: number | null; }
 interface HistoricalSourcePayload { source?: string; sourceUrl?: string | null; }
 interface LocaleConfig { code: string; label: string; aliases: string[]; documentLang: string; }
 interface I18nData { messages?: Record<string, Record<string, string>>; localeRegistry?: LocaleConfig[]; }
