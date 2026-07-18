@@ -2,6 +2,7 @@
 
 type ChartRange = "24h" | "7d" | "28d" | "90d" | "180d" | "ytd" | "1y" | "3y" | "all";
 type ChartKind = "timeline" | "heatmap" | "distribution";
+type ChartMetric = "players" | "uniqueIp";
 type BucketUnit = "hour" | "day" | "week";
 
 type MetricElementKey = "current" | "currentUnique" | "peak" | "peakUnique" | "average" | "averageUnique" | "lastSample" | "sampleCount" | "rangeLabel" | "sourceLabel";
@@ -48,6 +49,8 @@ interface BucketAccumulator extends BucketSummary {
 const chartElement = requireElement("#population-chart");
 const rangeButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-range]"));
 const chartButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-chart]"));
+const metricButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-metric]"));
+const metricToggle = requireElement("#metric-toggle");
 const statusDot = requireElement("#status-dot");
 const statusText = requireElement("#status-text");
 const HEATMAP_VISUAL_MIN = 0;
@@ -63,6 +66,8 @@ const HEATMAP_COLORS = [
   "#c62828",
 ];
 const DISTRIBUTION_BAR_COLOR = "#f1c44f";
+const UNIQUE_COLOR = "#55b6e8";
+const UNIQUE_RANGE_COLOR = "rgba(85, 182, 232, 0.18)";
 const DISTRIBUTION_STEP = 100;
 const KNOWN_BAD_GAP_START = Date.parse("2020-06-15T15:30:55.664Z");
 const KNOWN_BAD_GAP_END = Date.parse("2020-06-22T01:00:00.528Z");
@@ -83,6 +88,7 @@ const elements: Record<MetricElementKey, HTMLElement> = {
 let allPoints: StatsPoint[] = [];
 let currentRange: ChartRange = "7d";
 let activeChart: ChartKind = "timeline";
+let activeMetric: ChartMetric = "players";
 let chart: EChartsInstance | null = null;
 let historicalSource: HistoricalSource = { name: "Unknown", url: null };
 let currentStatus: CurrentStatus = { kind: "loading", key: "status.loading", params: {} };
@@ -409,6 +415,12 @@ function getSeriesLabel(config: TimelineConfig): string {
   return config.bucketKey ? tr(config.labelKey, { bucket: tr(config.bucketKey) }) : tr(config.labelKey);
 }
 
+function getUniqueSeriesLabel(config: TimelineConfig): string {
+  return config.bucketKey
+    ? tr("chart.series.averageUniqueIpBucket", { bucket: tr(config.bucketKey) })
+    : tr("metric.uniqueIp");
+}
+
 const RANGE_WINDOW_MS: Record<Exclude<ChartRange, "all" | "ytd">, number> = {
   "24h": DAY_MS,
   "7d": 7 * DAY_MS,
@@ -449,26 +461,32 @@ function bucketStart(timestamp: number, config: { unit: BucketUnit; size: number
   return anchor + Math.floor(weekIndex / config.size) * config.size * WEEK_MS;
 }
 
-function buildBucketSummaries(points: StatsPoint[], config: { unit: BucketUnit; size: number }): BucketSummary[] {
+function buildBucketSummaries(
+  points: StatsPoint[],
+  config: { unit: BucketUnit; size: number },
+  valueSelector: (point: StatsPoint) => number | null | undefined = (point) => point.count,
+): BucketSummary[] {
   const buckets = new Map<number, BucketAccumulator>();
   points.forEach((point) => {
+    const value = valueSelector(point);
+    if (typeof value !== "number" || !Number.isFinite(value)) return;
     const bucket = bucketStart(point.date.getTime(), config);
     const existing = buckets.get(bucket);
     if (!existing) {
       buckets.set(bucket, {
         time: bucket,
-        min: point.count,
-        max: point.count,
-        avg: point.count,
+        min: value,
+        max: value,
+        avg: value,
         samples: 1,
-        total: point.count,
+        total: value,
       });
       return;
     }
-    existing.min = Math.min(existing.min, point.count);
-    existing.max = Math.max(existing.max, point.count);
+    existing.min = Math.min(existing.min, value);
+    existing.max = Math.max(existing.max, value);
     existing.samples += 1;
-    existing.total += point.count;
+    existing.total += value;
     existing.avg = existing.total / existing.samples;
   });
   return [...buckets.values()]
@@ -507,14 +525,29 @@ function baseAxisOption() {
 function buildTimelineOptions(points: StatsPoint[]) {
   const visible = pointsForRange(points, currentRange);
   const config = getTimelineConfig(currentRange, visible);
-  const values = visible.map((point) => [point.date.getTime(), point.count]);
+  const playerValues = visible.map((point) => [point.date.getTime(), point.count]);
+  const uniqueSampleCount = visible.filter((point) => typeof point.uniqueCount === "number" && Number.isFinite(point.uniqueCount)).length;
+  const uniqueValues = visible.map((point) => [
+    point.date.getTime(),
+    typeof point.uniqueCount === "number" && Number.isFinite(point.uniqueCount) ? point.uniqueCount : null,
+  ]);
   const bucketed = config.unit != null && config.size != null;
-  const buckets = bucketed ? buildBucketSummaries(visible, { unit: config.unit as BucketUnit, size: config.size as number }) : [];
-  const averageData = buckets.map((bucket) => [bucket.time, Math.round(bucket.avg)]);
-  const rangeBaseData = buckets.map((bucket) => [bucket.time, bucket.min]);
-  const rangeSpreadData = buckets.map((bucket) => [bucket.time, bucket.max - bucket.min]);
-  const bucketMin = buckets.length > 0 ? Math.min(...buckets.map((bucket) => bucket.min)) : 0;
-  const bucketMax = buckets.length > 0 ? Math.max(...buckets.map((bucket) => bucket.max)) : 0;
+  const bucketConfig = { unit: config.unit as BucketUnit, size: config.size as number };
+  const playerBuckets = bucketed ? buildBucketSummaries(visible, bucketConfig) : [];
+  const uniqueBuckets = bucketed ? buildBucketSummaries(visible, bucketConfig, (point) => point.uniqueCount) : [];
+  const playerBucketMap = new Map(playerBuckets.map((bucket) => [bucket.time, bucket]));
+  const uniqueBucketMap = new Map(uniqueBuckets.map((bucket) => [bucket.time, bucket]));
+  const bucketMax = Math.max(0, ...playerBuckets.map((bucket) => bucket.max), ...uniqueBuckets.map((bucket) => bucket.max));
+  const uniqueBucketTimes = playerBuckets.map((bucket) => bucket.time);
+  const playerName = getSeriesLabel(config);
+  const uniqueName = getUniqueSeriesLabel(config);
+  const summaryRows = (label: string, bucket: BucketSummary): string[] => [
+    `<strong>${label}</strong>`,
+    `${tr("chart.tooltip.avg")}: ${formatInteger(bucket.avg)}`,
+    `${tr("chart.tooltip.peak")}: ${formatInteger(bucket.max)}`,
+    `${tr("chart.tooltip.trough")}: ${formatInteger(bucket.min)}`,
+    tr("chart.tooltip.samplesCount", { count: formatLocaleNumber(bucket.samples) }),
+  ];
 
   return {
     ...baseAxisOption(),
@@ -523,37 +556,47 @@ function buildTimelineOptions(points: StatsPoint[]) {
       backgroundColor: "#22292a",
       borderColor: "#35403e",
       textStyle: { color: "#f4f1e8" },
-      formatter: (params: Array<{ dataIndex?: number }>) => {
-        const index = params[0]?.dataIndex;
-        if (index == null) return "";
-        const bucket = buckets[index];
-        if (!bucket) return "";
-        return [
-          `<strong>${formatBucketRange(bucket.time, { unit: config.unit as BucketUnit, size: config.size as number })}</strong>`,
-          `${tr("chart.tooltip.avg")}: ${formatInteger(bucket.avg)}`,
-          `${tr("chart.tooltip.peak")}: ${formatInteger(bucket.max)}`,
-          `${tr("chart.tooltip.trough")}: ${formatInteger(bucket.min)}`,
-          tr("chart.tooltip.samplesCount", { count: formatLocaleNumber(bucket.samples) }),
-        ].join("<br />");
+      formatter: (params: Array<{ axisValue?: number | string }>) => {
+        const time = Number(params[0]?.axisValue);
+        if (!Number.isFinite(time)) return "";
+        const playerBucket = playerBucketMap.get(time);
+        const uniqueBucket = uniqueBucketMap.get(time);
+        if (!playerBucket && !uniqueBucket) return "";
+        const rows = [`<strong>${formatBucketRange(time, bucketConfig)}</strong>`];
+        if (playerBucket) rows.push(...summaryRows(tr("chart.series.players"), playerBucket));
+        if (uniqueBucket) rows.push(...summaryRows(tr("metric.uniqueIp"), uniqueBucket));
+        return rows.join("<br />");
       },
     } : { trigger: "axis", backgroundColor: "#22292a", borderColor: "#35403e", textStyle: { color: "#f4f1e8" }, valueFormatter: (value: number | string) => Number.isFinite(Number(value)) ? formatLocaleNumber(Number(value)) : value },
-    grid: { left: 52, right: 24, top: 34, bottom: 76 },
+    legend: { top: 8, data: [playerName, uniqueName], selectedMode: false, textStyle: { color: "#a9b1ad" } },
+    grid: { left: 52, right: 24, top: 54, bottom: 76 },
     xAxis: { type: "time", axisLine: { lineStyle: { color: "#35403e" } }, axisLabel: { color: "#a9b1ad", formatter: (value: number) => formatTimelineAxisLabel(value, currentRange) }, splitLine: { show: false } },
-    yAxis: { type: "value", min: bucketed ? Math.max(0, Math.floor(bucketMin * 0.94)) : 0, max: bucketed ? Math.ceil(bucketMax * 1.03) : undefined, axisLabel: { color: "#a9b1ad" }, splitLine: { lineStyle: { color: "rgba(169, 177, 173, 0.14)" } } },
+    yAxis: { type: "value", min: 0, max: bucketed && bucketMax > 0 ? Math.ceil(bucketMax * 1.03) : undefined, axisLabel: { color: "#a9b1ad" }, splitLine: { lineStyle: { color: "rgba(169, 177, 173, 0.14)" } } },
     dataZoom: [{ type: "inside", throttle: 80 }, { type: "slider", height: 24, bottom: 16, borderColor: "#35403e", fillerColor: "rgba(125, 216, 125, 0.18)", handleStyle: { color: "#7dd87d" }, textStyle: { color: "#a9b1ad" } }],
     series: bucketed ? [
-      { id: "range-base", type: "line", stack: "population-range", data: rangeBaseData, symbol: "none", lineStyle: { opacity: 0 }, itemStyle: { opacity: 0 }, areaStyle: { opacity: 0 }, silent: true, tooltip: { show: false } },
-      { id: "range-spread", name: tr("chart.series.playerRange"), type: "line", stack: "population-range", data: rangeSpreadData, symbol: "none", lineStyle: { opacity: 0 }, areaStyle: { color: "rgba(125, 216, 125, 0.16)" }, silent: true, tooltip: { show: false } },
-      { id: "bucket-average", name: getSeriesLabel(config), type: "line", smooth: true, showSymbol: buckets.length < 80, symbolSize: 7, lineStyle: { width: 3, color: "#7dd87d" }, itemStyle: { color: "#f1c44f" }, data: averageData, z: 3 },
+      { id: "player-range-base", type: "line", stack: "player-range", data: playerBuckets.map((bucket) => [bucket.time, bucket.min]), symbol: "none", lineStyle: { opacity: 0 }, itemStyle: { opacity: 0 }, areaStyle: { opacity: 0 }, silent: true, tooltip: { show: false } },
+      { id: "player-range-spread", type: "line", stack: "player-range", data: playerBuckets.map((bucket) => [bucket.time, bucket.max - bucket.min]), symbol: "none", lineStyle: { opacity: 0 }, areaStyle: { color: "rgba(125, 216, 125, 0.16)" }, silent: true, tooltip: { show: false } },
+      { id: "player-average", name: playerName, type: "line", smooth: true, showSymbol: playerBuckets.length < 80, symbolSize: 7, lineStyle: { width: 3, color: "#7dd87d" }, itemStyle: { color: "#f1c44f" }, data: playerBuckets.map((bucket) => [bucket.time, Math.round(bucket.avg)]), z: 3 },
+      { id: "unique-range-base", type: "line", stack: "unique-range", data: uniqueBucketTimes.map((time) => [time, uniqueBucketMap.get(time)?.min ?? null]), symbol: "none", connectNulls: false, lineStyle: { opacity: 0 }, itemStyle: { opacity: 0 }, areaStyle: { opacity: 0 }, silent: true, tooltip: { show: false } },
+      { id: "unique-range-spread", type: "line", stack: "unique-range", data: uniqueBucketTimes.map((time) => { const bucket = uniqueBucketMap.get(time); return [time, bucket ? bucket.max - bucket.min : null]; }), symbol: "none", connectNulls: false, lineStyle: { opacity: 0 }, areaStyle: { color: UNIQUE_RANGE_COLOR }, silent: true, tooltip: { show: false } },
+      { id: "unique-average", name: uniqueName, type: "line", smooth: true, connectNulls: false, showSymbol: uniqueBuckets.length < 80, symbolSize: 7, lineStyle: { width: 3, color: UNIQUE_COLOR }, itemStyle: { color: UNIQUE_COLOR }, data: uniqueBucketTimes.map((time) => [time, uniqueBucketMap.has(time) ? Math.round(uniqueBucketMap.get(time)!.avg) : null]), z: 4 },
     ] : [
-      { name: getSeriesLabel(config), type: "line", smooth: false, showSymbol: visible.length < 80, symbolSize: 7, lineStyle: { width: 3, color: "#7dd87d" }, itemStyle: { color: "#f1c44f" }, areaStyle: { color: { type: "linear", x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: "rgba(125, 216, 125, 0.36)" }, { offset: 1, color: "rgba(125, 216, 125, 0.02)" }] } }, data: values },
+      { id: "players", name: playerName, type: "line", smooth: false, showSymbol: visible.length < 80, symbolSize: 7, lineStyle: { width: 3, color: "#7dd87d" }, itemStyle: { color: "#f1c44f" }, areaStyle: { color: { type: "linear", x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: "rgba(125, 216, 125, 0.36)" }, { offset: 1, color: "rgba(125, 216, 125, 0.02)" }] } }, data: playerValues },
+      { id: "unique-ip", name: uniqueName, type: "line", smooth: false, connectNulls: false, showSymbol: uniqueSampleCount < 80, symbolSize: 6, lineStyle: { width: 3, color: UNIQUE_COLOR }, itemStyle: { color: UNIQUE_COLOR }, data: uniqueValues, z: 4 },
     ],
-    graphic: bucketed ? (buckets.length === 0 ? emptyGraphic() : null) : (values.length === 0 ? emptyGraphic() : null),
+    graphic: bucketed ? (playerBuckets.length === 0 ? emptyGraphic() : null) : (playerValues.length === 0 ? emptyGraphic() : null),
   };
 }
 
+function pointsForMetric(points: StatsPoint[], metric: ChartMetric = activeMetric): StatsPoint[] {
+  if (metric === "players") return points;
+  return points
+    .filter((point) => typeof point.uniqueCount === "number" && Number.isFinite(point.uniqueCount))
+    .map((point) => ({ ...point, count: point.uniqueCount as number }));
+}
+
 function buildHeatmapOptions(points: StatsPoint[]) {
-  const visible = pointsForRange(points, currentRange);
+  const visible = pointsForMetric(pointsForRange(points, currentRange));
   const weekdayLabels = formatWeekdayLabels();
   const hourLabels = Array.from({ length: 24 }, (_, hour) => `${hour}:00`);
   const percentileRanks = getHeatmapPercentileRanks(visible);
@@ -572,22 +615,47 @@ function buildHeatmapOptions(points: StatsPoint[]) {
     values.push([hour, day, toHeatmapScore(averageCount), averageCount, percentiles, bucket.length]);
   });
   const { min: visualMin, max: visualMax } = getHeatmapVisualBounds();
-  return { animationDuration: 450, backgroundColor: "transparent", tooltip: { position: "top", backgroundColor: "#22292a", borderColor: "#35403e", textStyle: { color: "#f4f1e8" }, formatter: (params: { value: [number, number, number | null, number, Record<string, number>, number] }) => { const [hour, day, , count, percentiles, samples] = params.value; const rows = [`<strong>${weekdayLabels[day]} ${hourLabels[hour]}</strong>`, `${tr("chart.tooltip.avg")}: ${formatInteger(count)}`]; Object.entries(percentiles || {}).forEach(([label, value]) => { rows.push(`${label}: ${formatInteger(value)}`); }); if (percentiles && Object.keys(percentiles).length > 0) rows.push(tr("chart.tooltip.samplesCount", { count: formatLocaleNumber(samples) })); return rows.join("<br />"); } }, grid: { left: 52, right: 24, top: 34, bottom: 88 }, xAxis: { type: "category", data: hourLabels, axisLine: { lineStyle: { color: "#35403e" } }, axisLabel: { color: "#a9b1ad" }, splitArea: { show: true, areaStyle: { color: ["rgba(255,255,255,0.02)", "transparent"] } } }, yAxis: { type: "category", data: weekdayLabels, inverse: true, axisLine: { lineStyle: { color: "#35403e" } }, axisLabel: { color: "#a9b1ad" }, splitArea: { show: true, areaStyle: { color: ["rgba(255,255,255,0.02)", "transparent"] } } }, visualMap: { min: visualMin, max: visualMax, dimension: 2, calculable: true, orient: "horizontal", left: "center", bottom: 18, textStyle: { color: "#a9b1ad" }, inRange: { color: HEATMAP_COLORS }, outOfRange: { color: [HEATMAP_OUTOFRANGE_COLOR] } }, series: [{ name: tr("chart.series.averagePlayers"), type: "heatmap", data: values, emphasis: { itemStyle: { borderColor: "#f4f1e8", borderWidth: 1 } } }], graphic: values.length === 0 ? emptyGraphic() : null };
+  const seriesName = activeMetric === "uniqueIp" ? tr("chart.series.averageUniqueIp") : tr("chart.series.averagePlayers");
+  const emptyText = activeMetric === "uniqueIp" ? tr("ui.noUniqueIpData") : tr("ui.noLiveData");
+  return { animationDuration: 450, backgroundColor: "transparent", tooltip: { position: "top", backgroundColor: "#22292a", borderColor: "#35403e", textStyle: { color: "#f4f1e8" }, formatter: (params: { value: [number, number, number | null, number, Record<string, number>, number] }) => { const [hour, day, , count, percentiles, samples] = params.value; const rows = [`<strong>${weekdayLabels[day]} ${hourLabels[hour]}</strong>`, `${tr("chart.tooltip.avg")}: ${formatInteger(count)}`]; Object.entries(percentiles || {}).forEach(([label, value]) => { rows.push(`${label}: ${formatInteger(value)}`); }); if (percentiles && Object.keys(percentiles).length > 0) rows.push(tr("chart.tooltip.samplesCount", { count: formatLocaleNumber(samples) })); return rows.join("<br />"); } }, grid: { left: 52, right: 24, top: 34, bottom: 88 }, xAxis: { type: "category", data: hourLabels, axisLine: { lineStyle: { color: "#35403e" } }, axisLabel: { color: "#a9b1ad" }, splitArea: { show: true, areaStyle: { color: ["rgba(255,255,255,0.02)", "transparent"] } } }, yAxis: { type: "category", data: weekdayLabels, inverse: true, axisLine: { lineStyle: { color: "#35403e" } }, axisLabel: { color: "#a9b1ad" }, splitArea: { show: true, areaStyle: { color: ["rgba(255,255,255,0.02)", "transparent"] } } }, visualMap: { min: visualMin, max: visualMax, dimension: 2, calculable: true, orient: "horizontal", left: "center", bottom: 18, textStyle: { color: "#a9b1ad" }, inRange: { color: HEATMAP_COLORS }, outOfRange: { color: [HEATMAP_OUTOFRANGE_COLOR] } }, series: [{ name: seriesName, type: "heatmap", data: values, emphasis: { itemStyle: { borderColor: "#f4f1e8", borderWidth: 1 } } }], graphic: values.length === 0 ? emptyGraphic(emptyText) : null };
 }
 
 function buildDistributionOptions(points: StatsPoint[]) {
-  const visible = pointsForRange(points, currentRange);
+  const visible = pointsForMetric(pointsForRange(points, currentRange));
   const counts = visible.map((point) => point.count);
   const buckets = buildDistributionBuckets(counts);
   const totalSamples = counts.length || 1;
   const percentageData = buckets.map((bucket) => (bucket.count / totalSamples) * 100);
-  return { ...baseAxisOption(), tooltip: { trigger: "axis", backgroundColor: "#22292a", borderColor: "#35403e", textStyle: { color: "#f4f1e8" }, formatter: (params: Array<{ dataIndex: number; value: number }>) => { const item = params[0]; if (!item) return ""; const bucket = buckets[item.dataIndex]; return [bucket.label, tr("chart.tooltip.ofSamples", { percent: formatPercentage(item.value) }), tr("chart.tooltip.samplesCount", { count: formatLocaleNumber(bucket.count) })].join("<br />"); } }, grid: { left: 52, right: 24, top: 34, bottom: 74 }, xAxis: { type: "category", data: buckets.map((bucket) => bucket.label), axisLine: { lineStyle: { color: "#35403e" } }, axisLabel: { color: "#a9b1ad", rotate: 35 } }, yAxis: { type: "value", axisLabel: { color: "#a9b1ad", formatter: (value: number) => formatPercentage(value) }, splitLine: { lineStyle: { color: "rgba(169, 177, 173, 0.14)" } } }, series: [{ name: tr("chart.series.samplesPercent"), type: "bar", barMaxWidth: 38, itemStyle: { borderRadius: [4, 4, 0, 0], borderColor: "#35403e", borderWidth: 1, color: DISTRIBUTION_BAR_COLOR }, data: percentageData }], graphic: visible.length === 0 ? emptyGraphic() : null };
+  const emptyText = activeMetric === "uniqueIp" ? tr("ui.noUniqueIpData") : tr("ui.noLiveData");
+  const barColor = activeMetric === "uniqueIp" ? UNIQUE_COLOR : DISTRIBUTION_BAR_COLOR;
+  return { ...baseAxisOption(), tooltip: { trigger: "axis", backgroundColor: "#22292a", borderColor: "#35403e", textStyle: { color: "#f4f1e8" }, formatter: (params: Array<{ dataIndex: number; value: number }>) => { const item = params[0]; if (!item) return ""; const bucket = buckets[item.dataIndex]; return [bucket.label, tr("chart.tooltip.ofSamples", { percent: formatPercentage(item.value) }), tr("chart.tooltip.samplesCount", { count: formatLocaleNumber(bucket.count) })].join("<br />"); } }, grid: { left: 52, right: 24, top: 34, bottom: 74 }, xAxis: { type: "category", data: buckets.map((bucket) => bucket.label), axisLine: { lineStyle: { color: "#35403e" } }, axisLabel: { color: "#a9b1ad", rotate: 35 } }, yAxis: { type: "value", axisLabel: { color: "#a9b1ad", formatter: (value: number) => formatPercentage(value) }, splitLine: { lineStyle: { color: "rgba(169, 177, 173, 0.14)" } } }, series: [{ name: tr("chart.series.samplesPercent"), type: "bar", barMaxWidth: 38, itemStyle: { borderRadius: [4, 4, 0, 0], borderColor: "#35403e", borderWidth: 1, color: barColor }, data: percentageData }], graphic: visible.length === 0 ? emptyGraphic(emptyText) : null };
 }
 
 function buildChartOptions(points: StatsPoint[]) {
   if (activeChart === "heatmap") return buildHeatmapOptions(points);
   if (activeChart === "distribution") return buildDistributionOptions(points);
   return buildTimelineOptions(points);
+}
+
+function updateMetricToggle(): void {
+  metricToggle.hidden = activeChart === "timeline";
+  metricButtons.forEach((button) => {
+    const selected = button.dataset.metric === activeMetric;
+    button.classList.toggle("is-active", selected);
+    button.setAttribute("aria-pressed", String(selected));
+  });
+}
+
+function selectChart(chartName: ChartKind): void {
+  activeChart = chartName;
+  activeMetric = "players";
+  chartButtons.forEach((button) => button.classList.toggle("is-active", button.dataset.chart === activeChart));
+  updateMetricToggle();
+}
+
+function selectMetric(metric: ChartMetric): void {
+  activeMetric = metric;
+  updateMetricToggle();
 }
 
 function renderChart(): void {
@@ -688,8 +756,14 @@ rangeButtons.forEach((button) => {
 
 chartButtons.forEach((button) => {
   button.addEventListener("click", () => {
-    activeChart = (button.dataset.chart as ChartKind) || "timeline";
-    chartButtons.forEach((item) => item.classList.toggle("is-active", item === button));
+    selectChart((button.dataset.chart as ChartKind) || "timeline");
+    render();
+  });
+});
+
+metricButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    selectMetric((button.dataset.metric as ChartMetric) || "players");
     render();
   });
 });
@@ -723,10 +797,13 @@ const testApi = {
   buildTimelineOptions,
   buildHeatmapOptions,
   buildDistributionOptions,
+  pointsForMetric,
+  selectChart,
+  selectMetric,
+  getChartStateForTest: () => ({ activeChart, activeMetric, metricToggleHidden: metricToggle.hidden }),
   setCurrentRangeForTest: (range: ChartRange) => { currentRange = range; },
-  setActiveChartForTest: (chartName: ChartKind) => { activeChart = chartName; },
 };
 
 globalThis.__MUSHMOM_TEST__ = testApi;
 
-export { initApp, normalizePayload, summarizeUniqueCounts, isKnownBadPoint, formatTime, formatTimelineAxisLabel, formatWeekdayLabels, formatBucketRange, getHeatmapVisualBounds, getHeatmapPercentileRanks, buildDistributionBuckets, buildBucketSummaries, buildTimelineOptions, buildHeatmapOptions, buildDistributionOptions, testApi };
+export { initApp, normalizePayload, summarizeUniqueCounts, isKnownBadPoint, formatTime, formatTimelineAxisLabel, formatWeekdayLabels, formatBucketRange, getHeatmapVisualBounds, getHeatmapPercentileRanks, buildDistributionBuckets, buildBucketSummaries, buildTimelineOptions, buildHeatmapOptions, buildDistributionOptions, pointsForMetric, testApi };

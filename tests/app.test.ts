@@ -315,6 +315,8 @@ describe("vite migration", () => {
     expect(indexHtml).toContain('id="current-unique-count"');
     expect(indexHtml).toContain('id="peak-unique-count"');
     expect(indexHtml).toContain('id="average-unique-count"');
+    expect(indexHtml).toContain('data-metric="players" aria-pressed="true"');
+    expect(indexHtml).toContain('data-metric="uniqueIp" aria-pressed="false"');
   });
 });
 
@@ -437,6 +439,11 @@ describe("bundled i18n", () => {
     expect(i18nMessages["zh-Hans"]?.["metric.uniqueIp"]).toBe("独立 IP");
     expect(i18nMessages["zh-Hant"]?.["metric.uniqueIp"]).toBe("獨立 IP");
     expect(i18nMessages["zh-Hans"]?.["chartView.heatmap"].length).toBeGreaterThan(0);
+    for (const locale of localeRegistry) {
+      expect(i18nMessages[locale.code]?.["aria.chartMetric"]?.length).toBeGreaterThan(0);
+      expect(i18nMessages[locale.code]?.["chart.series.averageUniqueIp"]?.length).toBeGreaterThan(0);
+      expect(i18nMessages[locale.code]?.["ui.noUniqueIpData"]?.length).toBeGreaterThan(0);
+    }
   });
 
   it("uses bundled locale data", async () => {
@@ -467,25 +474,62 @@ describe("bundled i18n", () => {
 });
 
 describe("app behavior", () => {
-  it("uses line for 7d and range band for longer bucketed ranges", async () => {
+  it("uses two raw lines and two range bands for bucketed timeline ranges", async () => {
     const { module, globals } = await loadAppModule();
     useWindow(globals);
     const points = [
-      { date: new Date(Date.UTC(2026, 3, 24, 12, 0, 0)), count: 1200 },
-      { date: new Date(Date.UTC(2026, 3, 24, 13, 0, 0)), count: 1250 },
+      { date: new Date(Date.UTC(2026, 3, 24, 12, 0, 0)), count: 1200, uniqueCount: 600 },
+      { date: new Date(Date.UTC(2026, 3, 24, 13, 0, 0)), count: 1250, uniqueCount: 625 },
+      { date: new Date(Date.UTC(2026, 3, 25, 12, 0, 0)), count: 1300 },
     ];
     module.testApi.setCurrentRangeForTest("7d");
     const rawSeries = module.buildTimelineOptions(points).series as Array<{ smooth?: boolean; type?: string }>;
-    expect(rawSeries[0]?.type).toBe("line");
-    expect(rawSeries[0]?.smooth).toBe(false);
+    expect(rawSeries.map((series) => series.type)).toEqual(["line", "line"]);
+    expect(rawSeries.every((series) => series.smooth === false)).toBe(true);
+    expect((rawSeries[1] as { data: Array<[number, number | null]> }).data.map(([, value]) => value)).toEqual([600, 625, null]);
     module.testApi.setCurrentRangeForTest("28d");
     const bucketedOptions = module.buildTimelineOptions(points);
     const bucketedSeries = bucketedOptions.series as Array<{ id?: string; smooth?: boolean; type?: string }>;
-    expect(bucketedSeries.map((series) => series.type)).toEqual(["line", "line", "line"]);
-    expect(bucketedSeries[0]?.id).toBe("range-base");
-    expect(bucketedSeries[1]?.id).toBe("range-spread");
-    expect(bucketedSeries[2]?.id).toBe("bucket-average");
+    expect(bucketedSeries.map((series) => series.type)).toEqual(["line", "line", "line", "line", "line", "line"]);
+    expect(bucketedSeries.map((series) => series.id)).toEqual([
+      "player-range-base", "player-range-spread", "player-average",
+      "unique-range-base", "unique-range-spread", "unique-average",
+    ]);
     expect(bucketedSeries[2]?.smooth).toBe(true);
+    expect(bucketedSeries[5]?.smooth).toBe(true);
+    expect((bucketedSeries[5] as { data: Array<[number, number | null]> }).data.map(([, value]) => value)).toEqual([613, null]);
+    expect(bucketedOptions.yAxis.min).toBe(0);
+    expect(bucketedOptions.legend.selectedMode).toBe(false);
+    expect(module.buildTimelineOptions([{ date: new Date(Date.UTC(2026, 3, 25)), count: 0, uniqueCount: 0 }]).yAxis.max).toBeUndefined();
+  });
+
+  it("switches heatmap and distribution to unique-IP samples and resets each view to players", async () => {
+    const { module } = await loadAppModule();
+    const points = [
+      { date: new Date(2026, 0, 1, 0), count: 1200, uniqueCount: 600 },
+      { date: new Date(2026, 0, 1, 1), count: 1400 },
+    ];
+
+    module.testApi.selectChart("heatmap");
+    expect(module.testApi.getChartStateForTest()).toEqual({ activeChart: "heatmap", activeMetric: "players", metricToggleHidden: false });
+    module.testApi.selectMetric("uniqueIp");
+    const heatmap = module.buildHeatmapOptions(points);
+    expect(heatmap.series[0]?.data).toHaveLength(1);
+    expect(heatmap.series[0]?.data[0]?.[3]).toBe(600);
+    expect(heatmap.series[0]?.data[0]?.[2]).toBe(12);
+
+    module.testApi.selectChart("distribution");
+    expect(module.testApi.getChartStateForTest()).toEqual({ activeChart: "distribution", activeMetric: "players", metricToggleHidden: false });
+    module.testApi.selectMetric("uniqueIp");
+    const distribution = module.buildDistributionOptions(points);
+    expect(distribution.xAxis.data).toEqual(["0-99", "100-199", "200-299", "300-399", "400-499", "500-599", "600-600"]);
+    expect(distribution.series[0]?.itemStyle.color).toBe("#55b6e8");
+
+    const emptyHeatmap = module.buildHeatmapOptions([{ date: new Date(2026, 0, 1, 0), count: 1200 }]);
+    expect(emptyHeatmap.graphic?.style.text).toBe("No unique IP data");
+
+    module.testApi.selectChart("timeline");
+    expect(module.testApi.getChartStateForTest()).toEqual({ activeChart: "timeline", activeMetric: "players", metricToggleHidden: true });
   });
 
   it("uses compact bucket ranges in bucket tooltips", async () => {
@@ -529,7 +573,7 @@ describe("app behavior", () => {
     expect(points.map((point) => point.uniqueCount)).toEqual([null, null, null, null, null, null, 750]);
   });
 
-  it("summarizes unique players only from samples that include them", async () => {
+  it("summarizes unique IP only from samples that include it", async () => {
     const { module } = await loadAppModule();
     expect(module.summarizeUniqueCounts([
       { date: new Date(0), count: 1000, uniqueCount: null },

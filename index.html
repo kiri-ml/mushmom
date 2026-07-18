@@ -90,11 +90,17 @@
           <button type="button" data-range="3y" data-i18n="range.3y">3 y</button>
           <button type="button" data-range="all" data-i18n="range.all">All</button>
         </div>
-        <nav class="chart-tabs" aria-label="Chart views" data-i18n-aria-label="aria.chartViews">
-          <button type="button" class="is-active" data-chart="timeline" data-i18n="chartView.timeline">Timeline</button>
-          <button type="button" data-chart="heatmap" data-i18n="chartView.heatmap">Heatmap</button>
-          <button type="button" data-chart="distribution" data-i18n="chartView.distribution">Distribution</button>
-        </nav>
+        <div class="chart-controls">
+          <div id="metric-toggle" class="metric-toggle" role="group" aria-label="Chart metric" data-i18n-aria-label="aria.chartMetric" hidden>
+            <button type="button" class="is-active" data-metric="players" aria-pressed="true" data-i18n="metric.players">Players</button>
+            <button type="button" data-metric="uniqueIp" aria-pressed="false" data-i18n="metric.uniqueIp">Unique IP</button>
+          </div>
+          <nav class="chart-tabs" aria-label="Chart views" data-i18n-aria-label="aria.chartViews">
+            <button type="button" class="is-active" data-chart="timeline" data-i18n="chartView.timeline">Timeline</button>
+            <button type="button" data-chart="heatmap" data-i18n="chartView.heatmap">Heatmap</button>
+            <button type="button" data-chart="distribution" data-i18n="chartView.distribution">Distribution</button>
+          </nav>
+        </div>
       </section>
 
       <section

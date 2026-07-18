@@ -259,7 +259,9 @@ h1 {
   color: var(--text);
 }
 
-.chart-tabs {
+.chart-controls,
+.chart-tabs,
+.metric-toggle {
   display: flex;
   flex: 0 1 auto;
   gap: 8px;
@@ -267,7 +269,17 @@ h1 {
   margin: 0;
 }
 
-.chart-tabs button {
+.chart-controls {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.metric-toggle[hidden] {
+  display: none;
+}
+
+.chart-tabs button,
+.metric-toggle button {
   flex: 0 1 auto;
   min-width: 0;
   min-height: 38px;
@@ -283,7 +295,9 @@ h1 {
 }
 
 .chart-tabs button:hover,
-.chart-tabs button.is-active {
+.chart-tabs button.is-active,
+.metric-toggle button:hover,
+.metric-toggle button.is-active {
   background: var(--panel-strong);
   color: var(--text);
 }
@@ -432,7 +446,17 @@ h1 {
     width: 100%;
   }
 
-  .chart-tabs button {
+  .chart-controls {
+    justify-content: stretch;
+    width: 100%;
+  }
+
+  .metric-toggle {
+    width: 100%;
+  }
+
+  .chart-tabs button,
+  .metric-toggle button {
     flex: 1 1 0;
     padding: 0 8px;
   }
