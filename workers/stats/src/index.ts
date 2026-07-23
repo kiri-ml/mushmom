@@ -138,6 +138,10 @@ function hasCommonCounts(counts: UserCounts): boolean {
   return counts.usercount > 0 && counts.uniquecount > 0;
 }
 
+function hasCharacterCountOnly(counts: UserCounts): boolean {
+  return counts.usercount > 0 && counts.uniquecount === 0;
+}
+
 function validateUsercounts(payload: unknown): UserCounts {
   const usercount = payload && typeof payload === "object"
     ? (payload as { usercount?: unknown }).usercount
@@ -155,7 +159,7 @@ function validateUsercounts(payload: unknown): UserCounts {
   return { usercount, uniquecount };
 }
 
-function validateUpdatePointPayload(payload: unknown): { timestamp: number; usercount: number; uniquecount: number } {
+function validateUpdatePointPayload(payload: unknown): { timestamp: number; usercount: number; uniquecount?: number } {
   const timestamp = payload && typeof payload === "object"
     ? (payload as { timestamp?: unknown }).timestamp
     : undefined;
@@ -172,8 +176,8 @@ function validateUpdatePointPayload(payload: unknown): { timestamp: number; user
   if (!isNonnegativeInteger(usercount)) {
     throw new SyncError("Request usercount must be a finite non-negative integer.", 400);
   }
-  if (!isNonnegativeInteger(uniquecount)) {
-    throw new SyncError("Request uniquecount must be a finite non-negative integer.", 400);
+  if (uniquecount !== undefined && !isNonnegativeInteger(uniquecount)) {
+    throw new SyncError("Request uniquecount must be a finite non-negative integer when provided.", 400);
   }
 
   return { timestamp, usercount, uniquecount };
@@ -210,6 +214,7 @@ async function fetchCurrentUsercounts(url: string, fetcher: typeof fetch): Promi
 
 async function readCurrentUsercounts(url: string, fetcher: typeof fetch, retryDelayMs: number): Promise<UserCounts> {
   let latestCounts: UserCounts | undefined;
+  let latestCharacterCountOnly: UserCounts | undefined;
   let latestError: unknown;
 
   for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt += 1) {
@@ -217,6 +222,7 @@ async function readCurrentUsercounts(url: string, fetcher: typeof fetch, retryDe
       const counts = await fetchCurrentUsercounts(url, fetcher);
       latestCounts = counts;
       if (hasCommonCounts(counts)) return counts;
+      if (hasCharacterCountOnly(counts)) latestCharacterCountOnly = counts;
     } catch (error) {
       latestError = error;
     }
@@ -226,6 +232,7 @@ async function readCurrentUsercounts(url: string, fetcher: typeof fetch, retryDe
     }
   }
 
+  if (latestCharacterCountOnly) return latestCharacterCountOnly;
   if (latestCounts) return latestCounts;
   if (latestError === undefined) {
     throw new SyncError("Failed to fetch current users.", 502);
@@ -246,7 +253,9 @@ export async function syncStats(env: Env, options: SyncOptions = {}): Promise<Sy
   const retryDelayMs = options.retryDelayMs ?? POLL_RETRY_DELAY_MS;
 
   const { usercount, uniquecount } = await readCurrentUsercounts(env.CURRENT_USERS_URL, fetcher, retryDelayMs);
-  const data: StatsRow = [bucket, usercount, uniquecount];
+  const data: StatsRow = hasCharacterCountOnly({ usercount, uniquecount })
+    ? [bucket, usercount]
+    : [bucket, usercount, uniquecount];
 
   const key = monthlyKey(bucket);
   let existing: R2ObjectBodyLike | null;
@@ -280,10 +289,12 @@ export async function syncStats(env: Env, options: SyncOptions = {}): Promise<Sy
   return result;
 }
 
-export async function updateStatsPoint(env: Env, timestamp: number, usercount: number, uniquecount: number): Promise<UpdatePointResult> {
+export async function updateStatsPoint(env: Env, timestamp: number, usercount: number, uniquecount?: number): Promise<UpdatePointResult> {
   const interval = readInterval(env);
   const bucket = bucketTimestamp(timestamp, interval);
-  const data: StatsRow = [bucket, usercount, uniquecount];
+  const data: StatsRow = uniquecount === undefined
+    ? [bucket, usercount]
+    : [bucket, usercount, uniquecount];
   if (!isStatsRow(data)) throw new SyncError("Request counts must be finite non-negative integers.", 400);
 
   const key = monthlyKey(bucket);
