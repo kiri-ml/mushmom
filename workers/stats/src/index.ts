@@ -1,7 +1,8 @@
 export type StatsRow = [epochSeconds: number, usercount: number]
   | [epochSeconds: number, usercount: number, uniquecount: number];
 
-const USERCOUNT_RETRY_DELAY_MS = 5_000;
+const POLL_RETRY_DELAY_MS = 1_000;
+const MAX_POLL_ATTEMPTS = 3;
 
 type R2ObjectBodyLike = {
   text(): Promise<string>;
@@ -133,6 +134,10 @@ function isNonnegativeInteger(value: unknown): value is number {
 
 type UserCounts = { usercount: number; uniquecount: number };
 
+function hasCommonCounts(counts: UserCounts): boolean {
+  return counts.usercount > 0 && counts.uniquecount > 0;
+}
+
 function validateUsercounts(payload: unknown): UserCounts {
   const usercount = payload && typeof payload === "object"
     ? (payload as { usercount?: unknown }).usercount
@@ -204,22 +209,28 @@ async function fetchCurrentUsercounts(url: string, fetcher: typeof fetch): Promi
 }
 
 async function readCurrentUsercounts(url: string, fetcher: typeof fetch, retryDelayMs: number): Promise<UserCounts> {
-  let firstCounts: UserCounts;
-  try {
-    firstCounts = await fetchCurrentUsercounts(url, fetcher);
-  } catch {
-    if (retryDelayMs > 0) await sleep(retryDelayMs);
-    return fetchCurrentUsercounts(url, fetcher);
+  let latestCounts: UserCounts | undefined;
+  let latestError: unknown;
+
+  for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt += 1) {
+    try {
+      const counts = await fetchCurrentUsercounts(url, fetcher);
+      latestCounts = counts;
+      if (hasCommonCounts(counts)) return counts;
+    } catch (error) {
+      latestError = error;
+    }
+
+    if (attempt < MAX_POLL_ATTEMPTS - 1 && retryDelayMs > 0) {
+      await sleep(retryDelayMs);
+    }
   }
 
-  if (firstCounts.usercount !== 0) return firstCounts;
-
-  try {
-    if (retryDelayMs > 0) await sleep(retryDelayMs);
-    return await fetchCurrentUsercounts(url, fetcher);
-  } catch {
-    return firstCounts;
+  if (latestCounts) return latestCounts;
+  if (latestError === undefined) {
+    throw new SyncError("Failed to fetch current users.", 502);
   }
+  throw latestError;
 }
 
 export async function syncStats(env: Env, options: SyncOptions = {}): Promise<SyncResult> {
@@ -232,7 +243,7 @@ export async function syncStats(env: Env, options: SyncOptions = {}): Promise<Sy
   const interval = readInterval(env);
   const bucket = bucketTimestamp(Math.floor(now.getTime() / 1000), interval);
   const fetcher = options.fetcher ?? fetch;
-  const retryDelayMs = options.retryDelayMs ?? USERCOUNT_RETRY_DELAY_MS;
+  const retryDelayMs = options.retryDelayMs ?? POLL_RETRY_DELAY_MS;
 
   const { usercount, uniquecount } = await readCurrentUsercounts(env.CURRENT_USERS_URL, fetcher, retryDelayMs);
   const data: StatsRow = [bucket, usercount, uniquecount];

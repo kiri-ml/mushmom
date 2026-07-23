@@ -105,11 +105,26 @@ describe("stats rows", () => {
 });
 
 describe("stats sync validation", () => {
+  it("returns immediately when both counts are positive", async () => {
+    const bucket = new FakeBucket();
+    const fetcher = responseWith({ usercount: 12, uniquecount: 7 });
+
+    const result = await syncStats(createEnv(bucket), {
+      now: new Date("2026-07-03T00:01:00.000Z"),
+      fetcher,
+      retryDelayMs: 0,
+    });
+
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(result.data).toEqual([1_783_036_800, 12, 7]);
+  });
+
   it("rejects repeated invalid upstream usercounts without writing", async () => {
     const bucket = new FakeBucket();
     const fetcher = responsesWith(
       { usercount: "1234" },
       { usercount: Number.POSITIVE_INFINITY },
+      { usercount: -1 },
     );
 
     await expect(syncStats(createEnv(bucket), {
@@ -117,7 +132,7 @@ describe("stats sync validation", () => {
       fetcher,
       retryDelayMs: 0,
     })).rejects.toThrow("finite non-negative integer");
-    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher).toHaveBeenCalledTimes(3);
     expect(bucket.puts).toEqual([]);
   });
 
@@ -126,6 +141,7 @@ describe("stats sync validation", () => {
     const fetcher = responsesWith(
       { usercount: 1234 },
       { usercount: 1234, uniquecount: -1 },
+      { usercount: 1234, uniquecount: 1.5 },
     );
 
     await expect(syncStats(createEnv(bucket), {
@@ -133,14 +149,18 @@ describe("stats sync validation", () => {
       fetcher,
       retryDelayMs: 0,
     })).rejects.toThrow("uniquecount must be a finite non-negative integer");
-    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher).toHaveBeenCalledTimes(3);
     expect(bucket.puts).toEqual([]);
   });
 
   it("upserts an existing monthly object", async () => {
     const bucket = new FakeBucket();
     bucket.objects.set("stats/jsonl/2026-07.jsonl", "[1783037100,12]\n[1783036500,8]\n");
-    const fetcher = responsesWith({ usercount: 0, uniquecount: 0 }, { usercount: 0, uniquecount: 0 });
+    const fetcher = responsesWith(
+      { usercount: 0, uniquecount: 0 },
+      { usercount: 0, uniquecount: 0 },
+      { usercount: 0, uniquecount: 0 },
+    );
 
     const result = await syncStats(createEnv(bucket), {
       now: new Date("2026-07-03T00:01:00.000Z"),
@@ -158,10 +178,10 @@ describe("stats sync validation", () => {
       data: [1_783_036_800, 0, 0],
     });
     expect(bucket.puts).toHaveLength(1);
-    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher).toHaveBeenCalledTimes(3);
   });
 
-  it("writes the retried value when an initial zero is not confirmed", async () => {
+  it("writes the common-case response after an initial zero pair", async () => {
     const bucket = new FakeBucket();
     const fetcher = responsesWith({ usercount: 0, uniquecount: 0 }, { usercount: 12, uniquecount: 7 });
 
@@ -176,10 +196,66 @@ describe("stats sync validation", () => {
     expect(result.data).toEqual([1_783_036_800, 12, 7]);
   });
 
-  it("writes the initial zero when zero confirmation fails", async () => {
+  it("retries a zero unique count and writes a later common-case response", async () => {
+    const bucket = new FakeBucket();
+    const fetcher = responsesWith(
+      { usercount: 1617, uniquecount: 0 },
+      { usercount: 1600, uniquecount: 818 },
+    );
+
+    const result = await syncStats(createEnv(bucket), {
+      now: new Date("2026-07-03T00:01:00.000Z"),
+      fetcher,
+      retryDelayMs: 0,
+    });
+
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(result.data).toEqual([1_783_036_800, 1600, 818]);
+  });
+
+  it("retries a zero user count even when the unique count is positive", async () => {
+    const bucket = new FakeBucket();
+    const fetcher = responsesWith(
+      { usercount: 0, uniquecount: 7 },
+      { usercount: 12, uniquecount: 7 },
+    );
+
+    const result = await syncStats(createEnv(bucket), {
+      now: new Date("2026-07-03T00:01:00.000Z"),
+      fetcher,
+      retryDelayMs: 0,
+    });
+
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(result.data).toEqual([1_783_036_800, 12, 7]);
+  });
+
+  it("writes the latest valid zero-containing response after three attempts", async () => {
+    const bucket = new FakeBucket();
+    const fetcher = responsesWith(
+      { usercount: 1617, uniquecount: 0 },
+      { usercount: 0, uniquecount: 818 },
+      { usercount: 1597, uniquecount: 0 },
+    );
+
+    const result = await syncStats(createEnv(bucket), {
+      now: new Date("2026-07-03T00:01:00.000Z"),
+      fetcher,
+      retryDelayMs: 0,
+    });
+
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(result.data).toEqual([1_783_036_800, 1597, 0]);
+  });
+
+  it("writes the latest valid zero-containing response when later attempts fail", async () => {
     const bucket = new FakeBucket();
     const fetcher = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ usercount: 0, uniquecount: 0 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ usercount: 5, uniquecount: 0 }), {
         status: 200,
         headers: { "content-type": "application/json" },
       }))
@@ -191,9 +267,9 @@ describe("stats sync validation", () => {
       retryDelayMs: 0,
     });
 
-    expect(fetcher).toHaveBeenCalledTimes(2);
-    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe("[1783036800,0,0]\n");
-    expect(result.data).toEqual([1_783_036_800, 0, 0]);
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe("[1783036800,5,0]\n");
+    expect(result.data).toEqual([1_783_036_800, 5, 0]);
   });
 
   it("writes the retried value when the initial fetch fails", async () => {
@@ -216,14 +292,15 @@ describe("stats sync validation", () => {
     expect(result.data).toEqual([1_783_036_800, 12, 7]);
   });
 
-  it("writes zero when the initial fetch fails and retry returns zero", async () => {
+  it("writes zero when failures surround a valid zero response", async () => {
     const bucket = new FakeBucket();
     const fetcher = vi.fn()
       .mockResolvedValueOnce(errorResponse(503))
       .mockResolvedValueOnce(new Response(JSON.stringify({ usercount: 0, uniquecount: 0 }), {
         status: 200,
         headers: { "content-type": "application/json" },
-      }));
+      }))
+      .mockRejectedValueOnce(new Error("temporary upstream failure"));
 
     const result = await syncStats(createEnv(bucket), {
       now: new Date("2026-07-03T00:01:00.000Z"),
@@ -231,24 +308,25 @@ describe("stats sync validation", () => {
       retryDelayMs: 0,
     });
 
-    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher).toHaveBeenCalledTimes(3);
     expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe("[1783036800,0,0]\n");
     expect(result.data).toEqual([1_783_036_800, 0, 0]);
   });
 
-  it("rejects repeated initial fetch failures without writing", async () => {
+  it("rejects three fetch failures without writing", async () => {
     const bucket = new FakeBucket();
     const fetcher = vi.fn()
       .mockRejectedValueOnce(new Error("temporary upstream failure"))
-      .mockResolvedValueOnce(errorResponse(503));
+      .mockResolvedValueOnce(errorResponse(503))
+      .mockResolvedValueOnce(errorResponse(504));
 
     await expect(syncStats(createEnv(bucket), {
       now: new Date("2026-07-03T00:01:00.000Z"),
       fetcher,
       retryDelayMs: 0,
-    })).rejects.toThrow("Current-users API returned HTTP 503");
+    })).rejects.toThrow("Current-users API returned HTTP 504");
 
-    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher).toHaveBeenCalledTimes(3);
     expect(bucket.gets).toEqual([]);
     expect(bucket.puts).toEqual([]);
   });
