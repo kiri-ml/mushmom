@@ -49,7 +49,7 @@ a {
   outline-offset: 3px;
 }
 
-.hero-panel,
+.stats-load-status,
 .language-switcher,
 .metric-card,
 .toolbar,
@@ -133,7 +133,7 @@ h1 {
   justify-self: end;
 }
 
-.hero-panel,
+.stats-load-status,
 .language-switcher {
   display: inline-flex;
   align-items: center;
@@ -158,19 +158,19 @@ h1 {
   cursor: pointer;
 }
 
-.hero-panel:hover,
+.stats-load-status:hover,
 .language-switcher:hover {
   border-color: rgba(169, 177, 173, 0.34);
 }
 
-#status-text {
+#stats-load-status-text {
   font-weight: 700;
   font-size: 0.9rem;
   letter-spacing: 0.035em;
   text-transform: uppercase;
 }
 
-.status-dot {
+.stats-load-status-dot {
   width: 10px;
   height: 10px;
   border-radius: 999px;
@@ -178,12 +178,12 @@ h1 {
   box-shadow: 0 0 10px rgba(241, 196, 79, 0.42);
 }
 
-.status-dot.is-failed {
+.stats-load-status-dot.is-failed {
   background: var(--danger);
   box-shadow: 0 0 10px rgba(255, 111, 97, 0.38);
 }
 
-.status-dot.is-ready {
+.stats-load-status-dot.is-ready {
   background: var(--accent);
   box-shadow: 0 0 10px rgba(125, 216, 125, 0.42);
 }
@@ -512,7 +512,7 @@ h1 {
     width: 100%;
   }
 
-  .hero-panel,
+  .stats-load-status,
   .language-switcher {
     min-width: 0;
   }

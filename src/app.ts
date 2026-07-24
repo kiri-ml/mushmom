@@ -16,7 +16,7 @@ interface HistoricalSource {
   url: string | null;
 }
 
-interface CurrentStatus {
+interface StatsLoadStatus {
   kind: "loading" | "ready" | "failed";
   key: string;
   params: Record<string, string | number>;
@@ -51,8 +51,8 @@ const rangeButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("[d
 const chartButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-chart]"));
 const metricButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-metric]"));
 const metricToggle = requireElement("#metric-toggle");
-const statusDot = requireElement("#status-dot");
-const statusText = requireElement("#status-text");
+const statsLoadStatusDot = requireElement("#stats-load-status-dot");
+const statsLoadStatusText = requireElement("#stats-load-status-text");
 const HEATMAP_VISUAL_MIN = 0;
 const HEATMAP_VISUAL_MAX = 100;
 const HEATMAP_OUTOFRANGE_COLOR = "#131617";
@@ -97,7 +97,7 @@ let activeChart: ChartKind = "timeline";
 let activeMetric: ChartMetric = "characters";
 let chart: EChartsInstance | null = null;
 let historicalSource: HistoricalSource = { name: "Unknown", url: null };
-let currentStatus: CurrentStatus = { kind: "loading", key: "status.loading", params: {} };
+let statsLoadStatus: StatsLoadStatus = { kind: "loading", key: "status.loading", params: {} };
 let pendingRender = false;
 
 function requireElement(selector: string): HTMLElement {
@@ -273,15 +273,15 @@ function formatBucketRange(startMs: number, config: { unit: BucketUnit; size: nu
   return sameYear ? `${formatShortDate(start)} - ${formatShortDate(end)}, ${end.getFullYear()}` : `${formatShortDate(start, true)} - ${formatShortDate(end, true)}`;
 }
 
-function setStatus(kind: CurrentStatus["kind"], key: string, params: Record<string, string | number> = {}): void {
-  currentStatus = { kind, key, params };
-  statusDot.classList.toggle("is-ready", kind === "ready");
-  statusDot.classList.toggle("is-failed", kind === "failed");
-  statusText.textContent = tr(key, params);
+function setStatsLoadStatus(kind: StatsLoadStatus["kind"], key: string, params: Record<string, string | number> = {}): void {
+  statsLoadStatus = { kind, key, params };
+  statsLoadStatusDot.classList.toggle("is-ready", kind === "ready");
+  statsLoadStatusDot.classList.toggle("is-failed", kind === "failed");
+  statsLoadStatusText.textContent = tr(key, params);
 }
 
-function refreshStatusText(): void {
-  statusText.textContent = tr(currentStatus.key, currentStatus.params);
+function refreshStatsLoadStatusText(): void {
+  statsLoadStatusText.textContent = tr(statsLoadStatus.key, statsLoadStatus.params);
 }
 
 function pointsForRange(points: StatsPoint[], range: ChartRange): StatsPoint[] {
@@ -743,17 +743,17 @@ async function fetchCurrentPopulation(): Promise<void> {
 
 async function loadStats(): Promise<void> {
   const hadHistoricalData = allPoints.length > 0;
-  setStatus("loading", "status.loading");
+  setStatsLoadStatus("loading", "status.loading");
   const [statsResult, currentResult] = await Promise.allSettled([fetchHistoricalStats(), fetchCurrentPopulation()]);
   if (statsResult.status === "fulfilled") {
-    setStatus("ready", "status.ready");
+    setStatsLoadStatus("ready", "status.ready");
   } else {
     console.warn(statsResult.reason);
     if (!hadHistoricalData) {
       allPoints = [];
       clearHistoricalMetrics(tr("source.unavailable"));
     }
-    setStatus("failed", "status.failed");
+    setStatsLoadStatus("failed", "status.failed");
   }
   if (currentResult.status === "rejected") {
     console.warn(currentResult.reason);
@@ -786,10 +786,10 @@ metricButtons.forEach((button) => {
 });
 
 window.addEventListener("mushmom:languagechange", () => {
-  refreshStatusText();
+  refreshStatsLoadStatusText();
   if (allPoints.length > 0) {
     updateHistoricalMetrics(allPoints, historicalSource.name, historicalSource.url);
-  } else if (currentStatus.kind === "failed") {
+  } else if (statsLoadStatus.kind === "failed") {
     clearHistoricalMetrics(tr("source.unavailable"));
   }
   render();
