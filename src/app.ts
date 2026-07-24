@@ -68,6 +68,11 @@ const HEATMAP_COLORS = [
 const DISTRIBUTION_BAR_COLOR = "#f1c44f";
 const PLAYER_COLOR = "#55b6e8";
 const PLAYER_RANGE_COLOR = "rgba(85, 182, 232, 0.18)";
+const CHART_AXIS_COLOR = "rgba(169, 177, 173, 0.2)";
+const CHART_GRID_COLOR = "rgba(169, 177, 173, 0.09)";
+const CHART_LABEL_COLOR = "#929b97";
+const CHART_TOOLTIP_BACKGROUND = "#1a1f20";
+const CHART_TOOLTIP_BORDER = "rgba(169, 177, 173, 0.2)";
 const DISTRIBUTION_STEP = 100;
 const KNOWN_BAD_GAP_START = Date.parse("2020-06-15T15:30:55.664Z");
 const KNOWN_BAD_GAP_END = Date.parse("2020-06-22T01:00:00.528Z");
@@ -518,7 +523,7 @@ function getTimelineConfig(range: ChartRange, visible: StatsPoint[]): TimelineCo
 }
 
 function emptyGraphic(text = tr("ui.noLiveData")) {
-  return { type: "text", left: "center", top: "middle", style: { text, fill: "#a9b1ad", font: "700 16px Inter, sans-serif" } };
+  return { type: "text", left: "center", top: "middle", style: { text, fill: CHART_LABEL_COLOR, font: "700 15px Inter, sans-serif" } };
 }
 
 function formatTooltipValue(value: number | string | null | undefined): number | string {
@@ -527,7 +532,7 @@ function formatTooltipValue(value: number | string | null | undefined): number |
 }
 
 function baseAxisOption() {
-  return { animationDuration: 450, backgroundColor: "transparent", tooltip: { trigger: "axis", backgroundColor: "#22292a", borderColor: "#35403e", textStyle: { color: "#f4f1e8" }, valueFormatter: formatTooltipValue } };
+  return { animationDuration: 450, backgroundColor: "transparent", tooltip: { trigger: "axis", backgroundColor: CHART_TOOLTIP_BACKGROUND, borderColor: CHART_TOOLTIP_BORDER, borderWidth: 1, textStyle: { color: "#f4f1e8" }, valueFormatter: formatTooltipValue } };
 }
 
 function timelineSymbol(sampleCount: number): "circle" | "none" {
@@ -565,8 +570,8 @@ function buildTimelineOptions(points: StatsPoint[]) {
     ...baseAxisOption(),
     tooltip: bucketed ? {
       trigger: "axis",
-      backgroundColor: "#22292a",
-      borderColor: "#35403e",
+      backgroundColor: CHART_TOOLTIP_BACKGROUND,
+      borderColor: CHART_TOOLTIP_BORDER,
       textStyle: { color: "#f4f1e8" },
       formatter: (params: Array<{ axisValue?: number | string }>) => {
         const time = Number(params[0]?.axisValue);
@@ -579,12 +584,12 @@ function buildTimelineOptions(points: StatsPoint[]) {
         if (playerBucket) rows.push(...summaryRows(tr("metric.players"), playerBucket));
         return rows.join("<br />");
       },
-    } : { trigger: "axis", backgroundColor: "#22292a", borderColor: "#35403e", textStyle: { color: "#f4f1e8" }, valueFormatter: formatTooltipValue },
-    legend: { top: 8, data: [characterName, playerName], selectedMode: false, textStyle: { color: "#a9b1ad" } },
+    } : { trigger: "axis", backgroundColor: CHART_TOOLTIP_BACKGROUND, borderColor: CHART_TOOLTIP_BORDER, textStyle: { color: "#f4f1e8" }, valueFormatter: formatTooltipValue },
+    legend: { top: 8, data: [characterName, playerName], selectedMode: false, textStyle: { color: CHART_LABEL_COLOR } },
     grid: { left: 52, right: 24, top: 54, bottom: 76 },
-    xAxis: { type: "time", axisLine: { lineStyle: { color: "#35403e" } }, axisLabel: { color: "#a9b1ad", formatter: (value: number) => formatTimelineAxisLabel(value, currentRange) }, splitLine: { show: false } },
-    yAxis: { type: "value", min: 0, max: bucketed && bucketMax > 0 ? Math.ceil(bucketMax * 1.03) : undefined, axisLabel: { color: "#a9b1ad" }, splitLine: { lineStyle: { color: "rgba(169, 177, 173, 0.14)" } } },
-    dataZoom: [{ type: "inside", throttle: 80 }, { type: "slider", height: 24, bottom: 16, borderColor: "#35403e", fillerColor: "rgba(125, 216, 125, 0.18)", handleStyle: { color: "#7dd87d" }, textStyle: { color: "#a9b1ad" } }],
+    xAxis: { type: "time", axisLine: { lineStyle: { color: CHART_AXIS_COLOR } }, axisLabel: { color: CHART_LABEL_COLOR, formatter: (value: number) => formatTimelineAxisLabel(value, currentRange) }, splitLine: { show: false } },
+    yAxis: { type: "value", min: 0, max: bucketed && bucketMax > 0 ? Math.ceil(bucketMax * 1.03) : undefined, axisLabel: { color: CHART_LABEL_COLOR }, splitLine: { lineStyle: { color: CHART_GRID_COLOR } } },
+    dataZoom: [{ type: "inside", throttle: 80 }, { type: "slider", height: 24, bottom: 16, borderColor: CHART_AXIS_COLOR, fillerColor: "rgba(125, 216, 125, 0.14)", handleStyle: { color: "#7dd87d" }, textStyle: { color: CHART_LABEL_COLOR } }],
     series: bucketed ? [
       { id: "character-range-base", type: "line", stack: "character-range", data: characterBuckets.map((bucket) => [bucket.time, bucket.min]), symbol: "none", lineStyle: { opacity: 0 }, itemStyle: { opacity: 0 }, areaStyle: { opacity: 0 }, silent: true, tooltip: { show: false } },
       { id: "character-range-spread", type: "line", stack: "character-range", data: characterBuckets.map((bucket) => [bucket.time, bucket.max - bucket.min]), symbol: "none", lineStyle: { opacity: 0 }, areaStyle: { color: "rgba(125, 216, 125, 0.16)" }, silent: true, tooltip: { show: false } },
@@ -629,7 +634,7 @@ function buildHeatmapOptions(points: StatsPoint[]) {
   const { min: visualMin, max: visualMax } = getHeatmapVisualBounds();
   const seriesName = activeMetric === "players" ? tr("chart.series.averagePlayers") : tr("chart.series.averageCharacters");
   const emptyText = activeMetric === "players" ? tr("ui.noPlayerData") : tr("ui.noLiveData");
-  return { animationDuration: 450, backgroundColor: "transparent", tooltip: { position: "top", backgroundColor: "#22292a", borderColor: "#35403e", textStyle: { color: "#f4f1e8" }, formatter: (params: { value: [number, number, number | null, number, Record<string, number>, number] }) => { const [hour, day, , count, percentiles, samples] = params.value; const rows = [`<strong>${weekdayLabels[day]} ${hourLabels[hour]}</strong>`, `${tr("chart.tooltip.avg")}: ${formatInteger(count)}`]; Object.entries(percentiles || {}).forEach(([label, value]) => { rows.push(`${label}: ${formatInteger(value)}`); }); if (percentiles && Object.keys(percentiles).length > 0) rows.push(tr("chart.tooltip.samplesCount", { count: formatLocaleNumber(samples) })); return rows.join("<br />"); } }, grid: { left: 52, right: 24, top: 34, bottom: 88 }, xAxis: { type: "category", data: hourLabels, axisLine: { lineStyle: { color: "#35403e" } }, axisLabel: { color: "#a9b1ad" }, splitArea: { show: true, areaStyle: { color: ["rgba(255,255,255,0.02)", "transparent"] } } }, yAxis: { type: "category", data: weekdayLabels, inverse: true, axisLine: { lineStyle: { color: "#35403e" } }, axisLabel: { color: "#a9b1ad" }, splitArea: { show: true, areaStyle: { color: ["rgba(255,255,255,0.02)", "transparent"] } } }, visualMap: { min: visualMin, max: visualMax, dimension: 2, calculable: true, orient: "horizontal", left: "center", bottom: 18, textStyle: { color: "#a9b1ad" }, inRange: { color: HEATMAP_COLORS }, outOfRange: { color: [HEATMAP_OUTOFRANGE_COLOR] } }, series: [{ name: seriesName, type: "heatmap", data: values, emphasis: { itemStyle: { borderColor: "#f4f1e8", borderWidth: 1 } } }], graphic: values.length === 0 ? emptyGraphic(emptyText) : null };
+  return { animationDuration: 450, backgroundColor: "transparent", tooltip: { position: "top", backgroundColor: CHART_TOOLTIP_BACKGROUND, borderColor: CHART_TOOLTIP_BORDER, textStyle: { color: "#f4f1e8" }, formatter: (params: { value: [number, number, number | null, number, Record<string, number>, number] }) => { const [hour, day, , count, percentiles, samples] = params.value; const rows = [`<strong>${weekdayLabels[day]} ${hourLabels[hour]}</strong>`, `${tr("chart.tooltip.avg")}: ${formatInteger(count)}`]; Object.entries(percentiles || {}).forEach(([label, value]) => { rows.push(`${label}: ${formatInteger(value)}`); }); if (percentiles && Object.keys(percentiles).length > 0) rows.push(tr("chart.tooltip.samplesCount", { count: formatLocaleNumber(samples) })); return rows.join("<br />"); } }, grid: { left: 52, right: 24, top: 34, bottom: 88 }, xAxis: { type: "category", data: hourLabels, axisLine: { lineStyle: { color: CHART_AXIS_COLOR } }, axisLabel: { color: CHART_LABEL_COLOR }, splitArea: { show: true, areaStyle: { color: ["rgba(255,255,255,0.012)", "transparent"] } } }, yAxis: { type: "category", data: weekdayLabels, inverse: true, axisLine: { lineStyle: { color: CHART_AXIS_COLOR } }, axisLabel: { color: CHART_LABEL_COLOR }, splitArea: { show: true, areaStyle: { color: ["rgba(255,255,255,0.012)", "transparent"] } } }, visualMap: { min: visualMin, max: visualMax, dimension: 2, calculable: true, orient: "horizontal", left: "center", bottom: 18, textStyle: { color: CHART_LABEL_COLOR }, inRange: { color: HEATMAP_COLORS }, outOfRange: { color: [HEATMAP_OUTOFRANGE_COLOR] } }, series: [{ name: seriesName, type: "heatmap", data: values, emphasis: { itemStyle: { borderColor: "#f4f1e8", borderWidth: 1 } } }], graphic: values.length === 0 ? emptyGraphic(emptyText) : null };
 }
 
 function buildDistributionOptions(points: StatsPoint[]) {
@@ -640,7 +645,7 @@ function buildDistributionOptions(points: StatsPoint[]) {
   const percentageData = buckets.map((bucket) => (bucket.count / totalSamples) * 100);
   const emptyText = activeMetric === "players" ? tr("ui.noPlayerData") : tr("ui.noLiveData");
   const barColor = activeMetric === "players" ? PLAYER_COLOR : DISTRIBUTION_BAR_COLOR;
-  return { ...baseAxisOption(), tooltip: { trigger: "axis", backgroundColor: "#22292a", borderColor: "#35403e", textStyle: { color: "#f4f1e8" }, formatter: (params: Array<{ dataIndex: number; value: number }>) => { const item = params[0]; if (!item) return ""; const bucket = buckets[item.dataIndex]; return [bucket.label, tr("chart.tooltip.ofSamples", { percent: formatPercentage(item.value) }), tr("chart.tooltip.samplesCount", { count: formatLocaleNumber(bucket.count) })].join("<br />"); } }, grid: { left: 52, right: 24, top: 34, bottom: 74 }, xAxis: { type: "category", data: buckets.map((bucket) => bucket.label), axisLine: { lineStyle: { color: "#35403e" } }, axisLabel: { color: "#a9b1ad", rotate: 35 } }, yAxis: { type: "value", axisLabel: { color: "#a9b1ad", formatter: (value: number) => formatPercentage(value) }, splitLine: { lineStyle: { color: "rgba(169, 177, 173, 0.14)" } } }, series: [{ name: tr("chart.series.samplesPercent"), type: "bar", barMaxWidth: 38, itemStyle: { borderRadius: [4, 4, 0, 0], borderColor: "#35403e", borderWidth: 1, color: barColor }, data: percentageData }], graphic: visible.length === 0 ? emptyGraphic(emptyText) : null };
+  return { ...baseAxisOption(), tooltip: { trigger: "axis", backgroundColor: CHART_TOOLTIP_BACKGROUND, borderColor: CHART_TOOLTIP_BORDER, textStyle: { color: "#f4f1e8" }, formatter: (params: Array<{ dataIndex: number; value: number }>) => { const item = params[0]; if (!item) return ""; const bucket = buckets[item.dataIndex]; return [bucket.label, tr("chart.tooltip.ofSamples", { percent: formatPercentage(item.value) }), tr("chart.tooltip.samplesCount", { count: formatLocaleNumber(bucket.count) })].join("<br />"); } }, grid: { left: 52, right: 24, top: 34, bottom: 74 }, xAxis: { type: "category", data: buckets.map((bucket) => bucket.label), axisLine: { lineStyle: { color: CHART_AXIS_COLOR } }, axisLabel: { color: CHART_LABEL_COLOR, rotate: 35 } }, yAxis: { type: "value", axisLabel: { color: CHART_LABEL_COLOR, formatter: (value: number) => formatPercentage(value) }, splitLine: { lineStyle: { color: CHART_GRID_COLOR } } }, series: [{ name: tr("chart.series.samplesPercent"), type: "bar", barMaxWidth: 38, itemStyle: { borderRadius: [4, 4, 0, 0], borderColor: CHART_AXIS_COLOR, borderWidth: 1, color: barColor }, data: percentageData }], graphic: visible.length === 0 ? emptyGraphic(emptyText) : null };
 }
 
 function buildChartOptions(points: StatsPoint[]) {
