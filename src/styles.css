@@ -50,7 +50,7 @@ a {
 }
 
 .stats-load-status,
-.language-switcher,
+.language-selector,
 .metric-card,
 .toolbar,
 .chart-section,
@@ -134,7 +134,7 @@ h1 {
 }
 
 .stats-load-status,
-.language-switcher {
+.language-selector {
   display: inline-flex;
   align-items: center;
   gap: 10px;
@@ -146,21 +146,46 @@ h1 {
   transition: border-color 160ms ease;
 }
 
-.language-switcher {
+.language-selector {
   width: 100%;
   min-width: 156px;
-  padding: 0 12px;
+  padding-left: 12px;
   background: var(--panel);
   color-scheme: dark;
   color: var(--text);
+}
+
+.language-selector-icon {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.language-switcher {
+  min-width: 0;
+  flex: 1;
+  align-self: stretch;
+  border: 0;
+  padding: 0 12px 0 0;
+  background: var(--panel);
+  color: inherit;
   font: inherit;
   font-weight: 800;
   cursor: pointer;
+  outline: 0;
 }
 
 .stats-load-status:hover,
-.language-switcher:hover {
+.language-selector:hover {
   border-color: rgba(169, 177, 173, 0.34);
+}
+
+.language-selector:has(.language-switcher:focus-visible) {
+  border-color: rgba(169, 177, 173, 0.34);
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
 }
 
 #stats-load-status-text {
@@ -513,7 +538,7 @@ h1 {
   }
 
   .stats-load-status,
-  .language-switcher {
+  .language-selector {
     min-width: 0;
   }
 

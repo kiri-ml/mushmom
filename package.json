@@ -24,5 +24,8 @@
   "type": "module",
   "engines": {
     "node": ">=22.0.0"
+  },
+  "dependencies": {
+    "lucide": "^1.26.0"
   }
 }
