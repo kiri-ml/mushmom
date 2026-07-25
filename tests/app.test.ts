@@ -449,6 +449,7 @@ describe("bundled i18n", () => {
     expect(i18nMessages["zh-Hans"]?.["chartView.heatmap"].length).toBeGreaterThan(0);
     for (const locale of localeRegistry) {
       expect(i18nMessages[locale.code]?.["aria.chartMetric"]?.length).toBeGreaterThan(0);
+      expect(i18nMessages[locale.code]?.["range.ytd"]?.length).toBeGreaterThan(0);
       expect(i18nMessages[locale.code]?.["metric.characters"]?.length).toBeGreaterThan(0);
       expect(i18nMessages[locale.code]?.["metric.players"]?.length).toBeGreaterThan(0);
       expect(i18nMessages[locale.code]?.["chart.series.averagePlayers"]?.length).toBeGreaterThan(0);
@@ -483,6 +484,35 @@ describe("bundled i18n", () => {
     module.setI18nData({ localeRegistry, messages: i18nMessages });
     expect(module.MushmomI18n.formatTimeZoneName("en-US").length).toBeGreaterThan(0);
     expect(module.MushmomI18n.formatTimeZoneName("zh-Hans").length).toBeGreaterThan(0);
+  });
+
+  it("renders each locale's YTD label with the current year available", async () => {
+    const rangeButton = createStubElement();
+    const document = createStubDocument({
+      querySelectorAll(selector: string) {
+        return selector === "[data-i18n-year]" ? [rangeButton] : [];
+      },
+    });
+    rangeButton.dataset.i18nYear = "range.ytd";
+    const globals = createBaseGlobals({ document });
+    stubGlobals(globals);
+    const module = await import("../src/i18n/index") as I18nModule;
+    module.setI18nData({ localeRegistry, messages: i18nMessages });
+
+    module.MushmomI18n.applyI18n("en-US");
+
+    expect(rangeButton.textContent).toBe("YTD");
+    module.MushmomI18n.applyI18n("de-DE");
+    expect(rangeButton.textContent).toBe(new Intl.DateTimeFormat("de-DE", { year: "numeric" }).format(new Date()));
+    module.MushmomI18n.applyI18n("zh-Hans");
+    expect(rangeButton.textContent).toBe("今年");
+    module.MushmomI18n.applyI18n("ja-JP");
+    expect(rangeButton.textContent).toBe("今年");
+    module.MushmomI18n.applyI18n("ko-KR");
+    expect(rangeButton.textContent).toBe("올해");
+    expect(indexHtml).toContain('data-i18n-year="range.ytd"');
+    expect(indexHtml).not.toContain('data-i18n-aria-label="range.ytd"');
+    expect(indexHtml).not.toContain('data-range="ytd" data-i18n="range.ytd"');
   });
 });
 

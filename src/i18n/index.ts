@@ -205,6 +205,27 @@ function updateTimeZoneNotes(lang: string = getCurrentLang()): void {
   });
 }
 
+function updateYearTranslations(lang: string = getCurrentLang()): void {
+  const normalized = normalizeLang(lang);
+  const localeConfig = getLocaleConfig(normalized);
+  const formatterLocale = localeConfig?.documentLang || normalized;
+  const now = new Date();
+  let year = String(now.getFullYear());
+
+  try {
+    year = new Intl.DateTimeFormat(formatterLocale, { year: "numeric" }).format(now);
+  } catch (error) {
+    console.warn(error);
+  }
+
+  document.querySelectorAll<HTMLElement>("[data-i18n-year]").forEach((el) => {
+    const key = el.dataset.i18nYear;
+    if (key && hasTranslation(key, normalized)) {
+      el.textContent = t(key, { year }, normalized);
+    }
+  });
+}
+
 function getSupportedLocales(): LocaleConfig[] {
   return state.localeRegistry.filter((locale) => locale.code && state.messages[locale.code]);
 }
@@ -243,6 +264,7 @@ function applyI18n(lang: string = getCurrentLang()): string {
   setTranslatedAttribute("[data-i18n-aria-label]", "i18nAriaLabel", "aria-label", normalized);
   setTranslatedAttribute("[data-i18n-alt]", "i18nAlt", "alt", normalized);
   setTranslatedAttribute("[data-i18n-content]", "i18nContent", "content", normalized);
+  updateYearTranslations(normalized);
   updateTimeZoneNotes(normalized);
 
   const selector = document.querySelector<HTMLSelectElement>("#language-select");
