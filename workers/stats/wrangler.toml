@@ -2,6 +2,10 @@ name = "mushmom-stats"
 main = "src/index.ts"
 compatibility_date = "2026-04-23"
 
+[observability]
+enabled = true
+head_sampling_rate = 1
+
 [vars]
 CURRENT_USERS_URL = "https://legends.ml/api/get_online_users"
 SAMPLE_INTERVAL_SECONDS = 300
