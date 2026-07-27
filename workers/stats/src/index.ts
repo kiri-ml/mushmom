@@ -378,6 +378,11 @@ export default {
   },
 
   async scheduled(_controller: unknown, env: Env): Promise<void> {
-    await syncStats(env);
+    try {
+      await syncStats(env);
+    } catch (error) {
+      console.error("Scheduled stats sync failed.", error);
+      throw error;
+    }
   },
 };
