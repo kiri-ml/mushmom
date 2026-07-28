@@ -316,6 +316,13 @@ describe("vite migration", () => {
     expect(indexHtml).toContain('id="current-player-count"');
     expect(indexHtml).toContain('id="peak-player-count"');
     expect(indexHtml).toContain('id="average-player-count"');
+    expect(indexHtml.match(/data-metric-board/g)).toHaveLength(2);
+    expect(indexHtml).toContain('class="metric-card__content"');
+    expect(indexHtml.match(/class="metric-card__range-ticks"/g)).toHaveLength(2);
+    expect(indexHtml).not.toMatch(/metric-card__range-ticks[^>]*><i>/);
+    expect(stylesCss).toContain("@keyframes metric-card-reel");
+    expect(stylesCss).toContain("@keyframes metric-card-countdown");
+    expect(stylesCss).toContain(".metric-card--cycling.is-counting::before");
     expect(indexHtml).toContain('data-metric="characters" aria-pressed="true"');
     expect(indexHtml).toContain('data-metric="players" aria-pressed="false"');
   });
@@ -439,6 +446,8 @@ describe("bundled i18n", () => {
     expect(i18nMessages["en-US"]?.["metric.players"]).toBe("Players");
     expect(i18nMessages["zh-Hans"]?.["metric.characters"]).toBe("角色");
     expect(i18nMessages["zh-Hans"]?.["metric.players"]).toBe("玩家");
+    expect(i18nMessages["zh-Hans"]?.["metric.peak"]).toBe("最高在线");
+    expect(i18nMessages["zh-Hans"]?.["metric.average"]).toBe("平均在线");
     expect(i18nMessages["zh-Hant"]?.["metric.characters"]).toBe("角色");
     expect(i18nMessages["zh-Hant"]?.["metric.players"]).toBe("玩家");
     expect(i18nMessages["zh-Hans"]?.["hero.eyebrow"]).toBe("MapleLegends 在线人数追踪器");
@@ -452,6 +461,9 @@ describe("bundled i18n", () => {
       expect(i18nMessages[locale.code]?.["range.ytd"]?.length).toBeGreaterThan(0);
       expect(i18nMessages[locale.code]?.["metric.characters"]?.length).toBeGreaterThan(0);
       expect(i18nMessages[locale.code]?.["metric.players"]?.length).toBeGreaterThan(0);
+      expect(i18nMessages[locale.code]?.["metric.peak"]?.length).toBeGreaterThan(0);
+      expect(i18nMessages[locale.code]?.["metric.average"]?.length).toBeGreaterThan(0);
+      expect(i18nMessages[locale.code]?.["range.24h"]?.length).toBeGreaterThan(0);
       expect(i18nMessages[locale.code]?.["chart.series.averagePlayers"]?.length).toBeGreaterThan(0);
       expect(i18nMessages[locale.code]?.["ui.noPlayerData"]?.length).toBeGreaterThan(0);
       expect(i18nMessages[locale.code]?.["error.currentPopulationRequestFailed"]?.length).toBeGreaterThan(0);
@@ -645,6 +657,89 @@ describe("app behavior", () => {
     const missing = module.summarizePlayerCounts([{ date: new Date(0), characterCount: 1000 }]);
     expect(Number.isNaN(missing.peak)).toBe(true);
     expect(Number.isNaN(missing.average)).toBe(true);
+  });
+
+  it("builds metric-card periods from endpoint coverage without rejecting internal gaps", async () => {
+    const { module } = await loadAppModule();
+    const latest = Date.UTC(2026, 6, 29, 12);
+    const day = 24 * 60 * 60 * 1000;
+    const snapshots = module.buildMetricSnapshots([
+      { date: new Date(latest - 29 * day), characterCount: 100, playerCount: null },
+      { date: new Date(latest - 7 * day), characterCount: 200, playerCount: 50 },
+      { date: new Date(latest - day), characterCount: 300, playerCount: 60 },
+      { date: new Date(latest), characterCount: 250, playerCount: 55 },
+    ]);
+
+    expect(snapshots.map((snapshot) => snapshot.period)).toEqual(["24h", "7d", "28d"]);
+    expect(snapshots[0]).toMatchObject({
+      peakCharacters: 300,
+      averageCharacters: 275,
+      peakPlayers: 60,
+      averagePlayers: 57.5,
+    });
+    expect(Number.isNaN(snapshots[2].peakPlayers)).toBe(true);
+    expect(Number.isNaN(snapshots[2].averagePlayers)).toBe(true);
+  });
+
+  it("requires player coverage at both range boundaries", async () => {
+    const { module } = await loadAppModule();
+    const latest = Date.UTC(2026, 6, 29, 12);
+    const day = 24 * 60 * 60 * 1000;
+    const [snapshot] = module.buildMetricSnapshots([
+      { date: new Date(latest - 2 * day), characterCount: 100, playerCount: 50 },
+      { date: new Date(latest - day), characterCount: 200, playerCount: 100 },
+      { date: new Date(latest), characterCount: 300, playerCount: null },
+    ]);
+
+    expect(snapshot.period).toBe("24h");
+    expect(Number.isNaN(snapshot.peakPlayers)).toBe(true);
+    expect(Number.isNaN(snapshot.averagePlayers)).toBe(true);
+  });
+
+  it("advances both metric cards at the reel midpoint and wraps periods", async () => {
+    vi.useFakeTimers();
+    const { module } = await loadAppModule();
+    const latest = Date.UTC(2026, 6, 29, 12);
+    const day = 24 * 60 * 60 * 1000;
+    const snapshots = module.buildMetricSnapshots([
+      { date: new Date(latest - 8 * day), characterCount: 100, playerCount: 50 },
+      { date: new Date(latest - day), characterCount: 300, playerCount: 150 },
+      { date: new Date(latest), characterCount: 200, playerCount: 100 },
+    ]);
+    module.testApi.setMetricSnapshotsForTest(snapshots);
+
+    expect(module.testApi.getMetricBoardStateForTest().activePeriod).toBe("24h");
+    module.testApi.advanceMetricSnapshot();
+    vi.advanceTimersByTime(249);
+    expect(module.testApi.getMetricBoardStateForTest().activePeriod).toBe("24h");
+    vi.advanceTimersByTime(1);
+    expect(module.testApi.getMetricBoardStateForTest().activePeriod).toBe("7d");
+    vi.advanceTimersByTime(250);
+    module.testApi.advanceMetricSnapshot();
+    vi.advanceTimersByTime(250);
+    expect(module.testApi.getMetricBoardStateForTest().activePeriod).toBe("24h");
+  });
+
+  it("resumes the countdown from its remaining delay after hover pause", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-29T12:00:00Z"));
+    const { module } = await loadAppModule();
+    const latest = Date.UTC(2026, 6, 29, 12);
+    const day = 24 * 60 * 60 * 1000;
+    module.testApi.setMetricSnapshotsForTest(module.buildMetricSnapshots([
+      { date: new Date(latest - 8 * day), characterCount: 100, playerCount: 50 },
+      { date: new Date(latest), characterCount: 200, playerCount: 100 },
+    ]));
+    module.testApi.resetMetricRotationForTest();
+
+    vi.advanceTimersByTime(2_000);
+    module.testApi.setMetricBoardPaused("test-hover", true);
+    vi.advanceTimersByTime(10_000);
+    module.testApi.setMetricBoardPaused("test-hover", false);
+    vi.advanceTimersByTime(3_999);
+    expect(module.testApi.getMetricBoardStateForTest().activePeriod).toBe("24h");
+    vi.advanceTimersByTime(251);
+    expect(module.testApi.getMetricBoardStateForTest().activePeriod).toBe("7d");
   });
 
   it("rerenders timeline axis labels with the selected locale", async () => {

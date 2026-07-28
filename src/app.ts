@@ -4,12 +4,22 @@ type ChartRange = "24h" | "7d" | "28d" | "90d" | "180d" | "ytd" | "1y" | "3y" | 
 type ChartKind = "timeline" | "heatmap" | "distribution";
 type ChartMetric = "characters" | "players";
 type BucketUnit = "hour" | "day" | "week";
+type MetricPeriod = "24h" | "7d" | "28d" | "90d";
 
-type MetricElementKey = "currentCharacters" | "currentPlayers" | "peakCharacters" | "peakPlayers" | "averageCharacters" | "averagePlayers" | "lastSample" | "lastSampleDate" | "sampleCount" | "rangeLabel" | "sourceLabel";
+type MetricElementKey = "currentCharacters" | "currentPlayers" | "peakPeriod" | "peakCharacters" | "peakPlayers" | "averagePeriod" | "averageCharacters" | "averagePlayers" | "lastSample" | "lastSampleDate" | "sampleCount" | "rangeLabel" | "sourceLabel";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
 const WEEK_MS = 7 * DAY_MS;
+const FIXED_RANGE_DURATION_MS: Record<Exclude<ChartRange, "all" | "ytd">, number> = {
+  "24h": DAY_MS,
+  "7d": 7 * DAY_MS,
+  "28d": 28 * DAY_MS,
+  "90d": 90 * DAY_MS,
+  "180d": 180 * DAY_MS,
+  "1y": 365 * DAY_MS,
+  "3y": 3 * 365 * DAY_MS,
+};
 
 interface HistoricalSource {
   name: string;
@@ -46,6 +56,14 @@ interface BucketAccumulator extends BucketSummary {
   total: number;
 }
 
+interface MetricSnapshot {
+  period: MetricPeriod;
+  peakCharacters: number;
+  averageCharacters: number;
+  peakPlayers: number;
+  averagePlayers: number;
+}
+
 const chartElement = requireElement("#population-chart");
 const rangeButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-range]"));
 const chartButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-chart]"));
@@ -80,8 +98,10 @@ const KNOWN_BAD_GAP_END = Date.parse("2020-06-22T01:00:00.528Z");
 const elements: Record<MetricElementKey, HTMLElement> = {
   currentCharacters: requireElement("#current-character-count"),
   currentPlayers: requireElement("#current-player-count"),
+  peakPeriod: requireElement("#peak-period-label"),
   peakCharacters: requireElement("#peak-character-count"),
   peakPlayers: requireElement("#peak-player-count"),
+  averagePeriod: requireElement("#average-period-label"),
   averageCharacters: requireElement("#average-character-count"),
   averagePlayers: requireElement("#average-player-count"),
   lastSample: requireElement("#last-sample"),
@@ -90,6 +110,14 @@ const elements: Record<MetricElementKey, HTMLElement> = {
   rangeLabel: requireElement("#range-label"),
   sourceLabel: requireElement("#source-label"),
 };
+const metricBoards = Array.from(document.querySelectorAll<HTMLElement>("[data-metric-board]"));
+const metricRangeTickGroups = metricBoards.map((board) => (
+  Array.from(board.querySelectorAll<HTMLElement>(".metric-card__range-ticks span"))
+));
+const METRIC_PERIODS: MetricPeriod[] = ["24h", "7d", "28d", "90d"];
+const METRIC_ROTATION_MS = 6_000;
+const METRIC_TRANSITION_MIDPOINT_MS = 250;
+const METRIC_TRANSITION_DURATION_MS = 500;
 
 let allPoints: StatsPoint[] = [];
 let currentRange: ChartRange = "7d";
@@ -99,6 +127,14 @@ let chart: EChartsInstance | null = null;
 let historicalSource: HistoricalSource = { name: "Unknown", url: null };
 let statsLoadStatus: StatsLoadStatus = { kind: "loading", key: "status.loading", params: {} };
 let pendingRender = false;
+let metricSnapshots: MetricSnapshot[] = [];
+let activeMetricSnapshotIndex = 0;
+let metricRotationTimer: ReturnType<typeof setTimeout> | null = null;
+let metricRotationDeadline = 0;
+let metricRotationRemainingMs = METRIC_ROTATION_MS;
+let metricTransitionMidpointTimer: ReturnType<typeof setTimeout> | null = null;
+let metricTransitionEndTimer: ReturnType<typeof setTimeout> | null = null;
+const metricPauseReasons = new Set<string>();
 
 function requireElement(selector: string): HTMLElement {
   const element = document.querySelector<HTMLElement>(selector);
@@ -294,16 +330,8 @@ function pointsForRange(points: StatsPoint[], range: ChartRange): StatsPoint[] {
     return points.filter((point) => point.date.getTime() >= yearStart);
   }
 
-  const windows: Record<Exclude<ChartRange, "all" | "ytd">, number> = {
-    "24h": DAY_MS,
-    "7d": 7 * DAY_MS,
-    "28d": 28 * DAY_MS,
-    "90d": 90 * DAY_MS,
-    "180d": 180 * DAY_MS,
-    "1y": 365 * DAY_MS,
-    "3y": 3 * 365 * DAY_MS,
-  };
-  const windowMs = windows[range as Exclude<ChartRange, "all" | "ytd">] ?? windows["24h"];
+  const windowMs = FIXED_RANGE_DURATION_MS[range as Exclude<ChartRange, "all" | "ytd">]
+    ?? FIXED_RANGE_DURATION_MS["24h"];
   return points.filter((point) => latest - point.date.getTime() <= windowMs);
 }
 
@@ -322,16 +350,13 @@ function setSourceLabel(source: string, sourceUrl: string | null = null): void {
 }
 
 function updateHistoricalMetrics(points: StatsPoint[], source: string, sourceUrl: string | null = null): void {
-  const visible = pointsForRange(points, "24h");
   const latest = points[points.length - 1];
-  const peak = visible.length > 0 ? Math.max(...visible.map((point) => point.characterCount)) : Number.NaN;
-  const avg = visible.length > 0 ? visible.reduce((total, point) => total + point.characterCount, 0) / visible.length : Number.NaN;
-  const playerSummary = summarizePlayerCounts(visible);
-
-  elements.peakCharacters.textContent = formatInteger(peak);
-  elements.peakPlayers.textContent = formatInteger(playerSummary.peak);
-  elements.averageCharacters.textContent = formatInteger(avg);
-  elements.averagePlayers.textContent = formatInteger(playerSummary.average);
+  const activePeriod = metricSnapshots[activeMetricSnapshotIndex]?.period;
+  metricSnapshots = buildMetricSnapshots(points);
+  const retainedIndex = metricSnapshots.findIndex((snapshot) => snapshot.period === activePeriod);
+  activeMetricSnapshotIndex = retainedIndex >= 0 ? retainedIndex : 0;
+  renderActiveMetricSnapshot();
+  resetMetricRotation();
   elements.lastSample.textContent = latest ? formatTime(latest.date) : "--";
   elements.lastSampleDate.textContent = latest ? formatDate(latest.date) : "--";
   elements.sampleCount.textContent = formatLocaleNumber(points.length);
@@ -340,8 +365,13 @@ function updateHistoricalMetrics(points: StatsPoint[], source: string, sourceUrl
 }
 
 function clearHistoricalMetrics(source: string): void {
+  metricSnapshots = [];
+  activeMetricSnapshotIndex = 0;
+  stopMetricRotation();
+  elements.peakPeriod.textContent = tr("range.24h");
   elements.peakCharacters.textContent = "--";
   elements.peakPlayers.textContent = "--";
+  elements.averagePeriod.textContent = tr("range.24h");
   elements.averageCharacters.textContent = "--";
   elements.averagePlayers.textContent = "--";
   elements.lastSample.textContent = "--";
@@ -363,6 +393,165 @@ function summarizePlayerCounts(points: StatsPoint[]): { peak: number; average: n
     peak: counts.length > 0 ? Math.max(...counts) : Number.NaN,
     average: average(counts),
   };
+}
+
+function hasMetricCoverage(
+  points: StatsPoint[],
+  period: MetricPeriod,
+  valueSelector: (point: StatsPoint) => number | null | undefined = (point) => point.characterCount,
+): boolean {
+  if (points.length === 0) return false;
+  const latest = points[points.length - 1].date.getTime();
+  const cutoff = latest - FIXED_RANGE_DURATION_MS[period];
+  let reachesCutoff = false;
+  let reachesLatest = false;
+  points.forEach((point) => {
+    const value = valueSelector(point);
+    if (typeof value !== "number" || !Number.isFinite(value)) return;
+    reachesCutoff ||= point.date.getTime() <= cutoff;
+    reachesLatest ||= point.date.getTime() === latest;
+  });
+  return reachesCutoff && reachesLatest;
+}
+
+function buildMetricSnapshots(points: StatsPoint[]): MetricSnapshot[] {
+  return METRIC_PERIODS.flatMap((period): MetricSnapshot[] => {
+    if (!hasMetricCoverage(points, period)) return [];
+    const visible = pointsForRange(points, period);
+    const characterCounts = visible.map((point) => point.characterCount);
+    const playerSummary = hasMetricCoverage(points, period, (point) => point.playerCount)
+      ? summarizePlayerCounts(visible)
+      : { peak: Number.NaN, average: Number.NaN };
+    return [{
+      period,
+      peakCharacters: Math.max(...characterCounts),
+      averageCharacters: average(characterCounts),
+      peakPlayers: playerSummary.peak,
+      averagePlayers: playerSummary.average,
+    }];
+  });
+}
+
+function renderActiveMetricSnapshot(): void {
+  const snapshot = metricSnapshots[activeMetricSnapshotIndex];
+  const availablePeriods = new Set(metricSnapshots.map((item) => item.period));
+  metricRangeTickGroups.forEach((ticks) => {
+    ticks.forEach((tick, index) => {
+      const period = METRIC_PERIODS[index];
+      tick.classList.toggle("is-active", snapshot?.period === period);
+      tick.classList.toggle("is-unavailable", !availablePeriods.has(period));
+    });
+  });
+  if (!snapshot) {
+    elements.peakCharacters.textContent = "--";
+    elements.peakPlayers.textContent = "--";
+    elements.averageCharacters.textContent = "--";
+    elements.averagePlayers.textContent = "--";
+    return;
+  }
+  const range = tr(`range.${snapshot.period}`);
+  elements.peakPeriod.textContent = range;
+  elements.peakCharacters.textContent = formatInteger(snapshot.peakCharacters);
+  elements.peakPlayers.textContent = formatInteger(snapshot.peakPlayers);
+  elements.averagePeriod.textContent = range;
+  elements.averageCharacters.textContent = formatInteger(snapshot.averageCharacters);
+  elements.averagePlayers.textContent = formatInteger(snapshot.averagePlayers);
+}
+
+function prefersReducedMotion(): boolean {
+  return typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+function clearMetricTransitionTimers(): void {
+  if (metricTransitionMidpointTimer !== null) clearTimeout(metricTransitionMidpointTimer);
+  if (metricTransitionEndTimer !== null) clearTimeout(metricTransitionEndTimer);
+  metricTransitionMidpointTimer = null;
+  metricTransitionEndTimer = null;
+  metricBoards.forEach((card) => card.classList.remove("is-transitioning"));
+}
+
+function advanceMetricSnapshot(): void {
+  if (metricSnapshots.length < 2 || metricPauseReasons.size > 0) return;
+  const showNext = () => {
+    activeMetricSnapshotIndex = (activeMetricSnapshotIndex + 1) % metricSnapshots.length;
+    renderActiveMetricSnapshot();
+  };
+  clearMetricTransitionTimers();
+  if (prefersReducedMotion()) {
+    showNext();
+    return;
+  }
+  metricBoards.forEach((card) => card.classList.add("is-transitioning"));
+  metricTransitionMidpointTimer = setTimeout(showNext, METRIC_TRANSITION_MIDPOINT_MS);
+  metricTransitionEndTimer = setTimeout(() => {
+    metricBoards.forEach((card) => card.classList.remove("is-transitioning"));
+    metricTransitionEndTimer = null;
+  }, METRIC_TRANSITION_DURATION_MS);
+}
+
+function stopMetricRotation(): void {
+  if (metricRotationTimer !== null) clearTimeout(metricRotationTimer);
+  metricRotationTimer = null;
+  metricRotationDeadline = 0;
+  metricRotationRemainingMs = METRIC_ROTATION_MS;
+  metricBoards.forEach((card) => {
+    card.classList.remove("is-counting");
+    card.classList.remove("is-paused");
+  });
+  clearMetricTransitionTimers();
+}
+
+function startMetricCountdownAnimation(startProgress: number, durationMs: number): void {
+  const normalizedProgress = Math.max(0, Math.min(1, startProgress));
+  metricBoards.forEach((card) => {
+    card.classList.remove("is-counting");
+    card.classList.remove("is-paused");
+    card.style.setProperty("--countdown-start", String(normalizedProgress));
+    card.style.setProperty("--countdown-duration", `${Math.max(0, durationMs)}ms`);
+    void card.offsetWidth;
+    card.classList.add("is-counting");
+  });
+}
+
+function scheduleMetricRotation(): void {
+  if (metricSnapshots.length < 2 || metricPauseReasons.size > 0 || document.visibilityState === "hidden") return;
+  metricRotationDeadline = Date.now() + metricRotationRemainingMs;
+  metricRotationTimer = setTimeout(() => {
+    metricRotationTimer = null;
+    advanceMetricSnapshot();
+    metricRotationRemainingMs = METRIC_ROTATION_MS;
+    startMetricCountdownAnimation(1, METRIC_ROTATION_MS);
+    scheduleMetricRotation();
+  }, metricRotationRemainingMs);
+}
+
+function resetMetricRotation(): void {
+  stopMetricRotation();
+  if (metricSnapshots.length > 1 && metricPauseReasons.size === 0 && document.visibilityState !== "hidden") {
+    startMetricCountdownAnimation(1, METRIC_ROTATION_MS);
+    scheduleMetricRotation();
+  }
+}
+
+function setMetricBoardPaused(reason: string, paused: boolean): void {
+  const wasPaused = metricPauseReasons.size > 0;
+  if (paused) metricPauseReasons.add(reason);
+  else metricPauseReasons.delete(reason);
+  const isPaused = metricPauseReasons.size > 0;
+  if (!wasPaused && isPaused) {
+    if (metricRotationTimer !== null) {
+      clearTimeout(metricRotationTimer);
+      metricRotationTimer = null;
+      metricRotationRemainingMs = Math.max(0, metricRotationDeadline - Date.now());
+    }
+    metricBoards.forEach((card) => card.classList.add("is-paused"));
+  } else if (wasPaused && !isPaused && document.visibilityState !== "hidden") {
+    startMetricCountdownAnimation(
+      metricRotationRemainingMs / METRIC_ROTATION_MS,
+      metricRotationRemainingMs,
+    );
+    scheduleMetricRotation();
+  }
 }
 
 function percentile(values: number[], percentileRank: number): number {
@@ -785,6 +974,19 @@ metricButtons.forEach((button) => {
   });
 });
 
+metricBoards.forEach((card, index) => {
+  const pointerReason = `pointer-${index}`;
+  const focusReason = `focus-${index}`;
+  card.addEventListener("mouseenter", () => setMetricBoardPaused(pointerReason, true));
+  card.addEventListener("mouseleave", () => setMetricBoardPaused(pointerReason, false));
+  card.addEventListener("focusin", () => setMetricBoardPaused(focusReason, true));
+  card.addEventListener("focusout", () => setMetricBoardPaused(focusReason, false));
+});
+
+document.addEventListener("visibilitychange", () => {
+  setMetricBoardPaused("document-hidden", document.visibilityState === "hidden");
+});
+
 window.addEventListener("mushmom:languagechange", () => {
   refreshStatsLoadStatusText();
   if (allPoints.length > 0) {
@@ -815,12 +1017,27 @@ const testApi = {
   buildHeatmapOptions,
   buildDistributionOptions,
   pointsForMetric,
+  hasMetricCoverage,
+  buildMetricSnapshots,
+  advanceMetricSnapshot,
+  setMetricBoardPaused,
   selectChart,
   selectMetric,
   getChartStateForTest: () => ({ activeChart, activeMetric, metricToggleHidden: metricToggle.hidden }),
+  getMetricBoardStateForTest: () => ({
+    periods: metricSnapshots.map((snapshot) => snapshot.period),
+    activePeriod: metricSnapshots[activeMetricSnapshotIndex]?.period ?? null,
+    paused: metricPauseReasons.size > 0,
+  }),
+  setMetricSnapshotsForTest: (snapshots: MetricSnapshot[]) => {
+    metricSnapshots = snapshots;
+    activeMetricSnapshotIndex = 0;
+    renderActiveMetricSnapshot();
+  },
+  resetMetricRotationForTest: resetMetricRotation,
   setCurrentRangeForTest: (range: ChartRange) => { currentRange = range; },
 };
 
 globalThis.__MUSHMOM_TEST__ = testApi;
 
-export { initApp, normalizePayload, summarizePlayerCounts, isKnownBadPoint, formatTime, formatTimelineAxisLabel, formatWeekdayLabels, formatBucketRange, getHeatmapVisualBounds, getHeatmapPercentileRanks, buildDistributionBuckets, buildBucketSummaries, buildTimelineOptions, buildHeatmapOptions, buildDistributionOptions, pointsForMetric, testApi };
+export { initApp, normalizePayload, summarizePlayerCounts, hasMetricCoverage, buildMetricSnapshots, isKnownBadPoint, formatTime, formatTimelineAxisLabel, formatWeekdayLabels, formatBucketRange, getHeatmapVisualBounds, getHeatmapPercentileRanks, buildDistributionBuckets, buildBucketSummaries, buildTimelineOptions, buildHeatmapOptions, buildDistributionOptions, pointsForMetric, testApi };

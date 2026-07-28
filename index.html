@@ -70,15 +70,27 @@
           <strong id="current-character-count">--</strong>
           <p class="metric-secondary"><span id="current-player-count" class="metric-secondary-value">--</span><span class="metric-secondary-label" data-i18n="metric.players">Players</span></p>
         </article>
-        <article class="metric-card">
-          <span data-i18n="metric.peak24h">24h peak</span>
-          <strong id="peak-character-count">--</strong>
-          <p class="metric-secondary"><span id="peak-player-count" class="metric-secondary-value">--</span><span class="metric-secondary-label" data-i18n="metric.players">Players</span></p>
+        <article class="metric-card metric-card--cycling" data-metric-board tabindex="0">
+          <div class="metric-card__content">
+            <div class="metric-card__heading">
+              <span data-i18n="metric.peak">Peak online</span>
+              <span id="peak-period-label" class="metric-card__period metric-card__dynamic-value">24 h</span>
+            </div>
+            <strong id="peak-character-count" class="metric-card__dynamic-value">--</strong>
+            <p class="metric-secondary"><span id="peak-player-count" class="metric-secondary-value metric-card__dynamic-value">--</span><span class="metric-secondary-label" data-i18n="metric.players">Players</span></p>
+          </div>
+          <div class="metric-card__range-ticks" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
         </article>
-        <article class="metric-card">
-          <span data-i18n="metric.average24h">24h average</span>
-          <strong id="average-character-count">--</strong>
-          <p class="metric-secondary"><span id="average-player-count" class="metric-secondary-value">--</span><span class="metric-secondary-label" data-i18n="metric.players">Players</span></p>
+        <article class="metric-card metric-card--cycling" data-metric-board tabindex="0">
+          <div class="metric-card__content">
+            <div class="metric-card__heading">
+              <span data-i18n="metric.average">Average online</span>
+              <span id="average-period-label" class="metric-card__period metric-card__dynamic-value">24 h</span>
+            </div>
+            <strong id="average-character-count" class="metric-card__dynamic-value">--</strong>
+            <p class="metric-secondary"><span id="average-player-count" class="metric-secondary-value metric-card__dynamic-value">--</span><span class="metric-secondary-label" data-i18n="metric.players">Players</span></p>
+          </div>
+          <div class="metric-card__range-ticks" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
         </article>
         <article class="metric-card metric-card--time">
           <span data-i18n="metric.lastSample">Last sample</span>
