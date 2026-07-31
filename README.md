@@ -124,10 +124,9 @@ Cloudflare Pages should use:
 Monthly R2 stats are available from `GET /api/stats/YYYY-MM`. The month must use
 the zero-padded UTC format, for example `/api/stats/2026-07`. Successful
 responses are JSON arrays of legacy `[epochSeconds, usercount]` or new
-`[epochSeconds, usercount, uniquecount]` rows in ascending order. Months before
-August 2026 are stored as `stats/jsonl/YYYY-MM.jsonl`. Beginning at
-`2026-08-01T00:00:00Z`, months are stored as compact row-based JSON arrays at
-`stats/json/YYYY-MM.json`; a month with no object returns `[]`.
+`[epochSeconds, usercount, uniquecount]` rows in ascending order. Live monthly
+data is stored as compact row-based JSON arrays at `stats/json/YYYY-MM.json`,
+including the migrated `2026-07.json`; a month with no object returns `[]`.
 
 If the observer reports a zero character count with a positive unique count,
 the stored row is `[epochSeconds, null, uniquecount]`; null marks the character

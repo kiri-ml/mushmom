@@ -4,7 +4,6 @@ export type StatsRow = [epochSeconds: number, usercount: number]
 
 const POLL_RETRY_DELAY_MS = 1_000;
 const MAX_POLL_ATTEMPTS = 3;
-export const ROW_JSON_CUTOVER_EPOCH = 1_785_542_400;
 
 type R2ObjectBodyLike = {
   text(): Promise<string>;
@@ -43,9 +42,7 @@ export function monthlyKey(epochSeconds: number): string {
 
   const iso = new Date(epochSeconds * 1000).toISOString();
   const month = iso.slice(0, 7);
-  return epochSeconds >= ROW_JSON_CUTOVER_EPOCH
-    ? `stats/json/${month}.json`
-    : `stats/jsonl/${month}.jsonl`;
+  return `stats/json/${month}.json`;
 }
 
 export function isStatsRow(value: unknown): value is StatsRow {
@@ -188,19 +185,12 @@ export async function appendStats(env: Env, options: AppendOptions = {}): Promis
     throw new Error(`Failed to read ${key}: ${detail}`);
   }
 
-  const rowJson = timestamp >= ROW_JSON_CUTOVER_EPOCH;
-  const updatedText = rowJson
-    ? appendRowJson(existingText, data)
-    : `${existingText}${existingText !== "" && !existingText.endsWith("\n") ? "\n" : ""}${JSON.stringify(data)}\n`;
+  const updatedText = appendRowJson(existingText, data);
   const result: AppendResult = { fetchedAt, timestamp, data };
 
   try {
     await env.STATS_BUCKET.put(key, updatedText, {
-      httpMetadata: {
-        contentType: rowJson
-          ? "application/json; charset=utf-8"
-          : "application/x-ndjson; charset=utf-8",
-      },
+      httpMetadata: { contentType: "application/json; charset=utf-8" },
     });
   } catch (error) {
     const detail = error instanceof Error ? error.message : "unknown R2 error";

@@ -5,7 +5,6 @@ import {
   default as worker,
   isStatsRow,
   monthlyKey,
-  ROW_JSON_CUTOVER_EPOCH,
   type Env,
   type StatsRow,
 } from "./index";
@@ -61,25 +60,24 @@ function responsesWith(...payloads: unknown[]): typeof fetch {
 }
 
 describe("stats rows", () => {
-  it("generates UTC monthly keys from bucketed timestamps", () => {
-    expect(monthlyKey(1_783_036_800)).toBe("stats/jsonl/2026-07.jsonl");
+  it("generates JSON keys for every UTC month", () => {
+    expect(monthlyKey(1_783_036_800)).toBe("stats/json/2026-07.json");
     expect(monthlyKey(Date.parse("2026-06-30T23:55:00.000Z") / 1000))
-      .toBe("stats/jsonl/2026-06.jsonl");
-    expect(monthlyKey(ROW_JSON_CUTOVER_EPOCH - 1)).toBe("stats/jsonl/2026-07.jsonl");
-    expect(monthlyKey(ROW_JSON_CUTOVER_EPOCH)).toBe("stats/json/2026-08.json");
+      .toBe("stats/json/2026-06.json");
+    expect(monthlyKey(1_785_542_400)).toBe("stats/json/2026-08.json");
   });
 
   it("creates and appends compact row-based JSON without parsing", () => {
-    const first = appendRowJson("", [ROW_JSON_CUTOVER_EPOCH, 12, 7]);
+    const first = appendRowJson("", [1_785_542_400, 12, 7]);
     expect(first).toBe("[[1785542400,12,7]]");
-    expect(appendRowJson(first, [ROW_JSON_CUTOVER_EPOCH + 60, null, 8])).toBe(
+    expect(appendRowJson(first, [1_785_542_460, null, 8])).toBe(
       "[[1785542400,12,7],[1785542460,null,8]]",
     );
-    expect(JSON.parse(appendRowJson(first, [ROW_JSON_CUTOVER_EPOCH + 60, 14]))).toEqual([
-      [ROW_JSON_CUTOVER_EPOCH, 12, 7],
-      [ROW_JSON_CUTOVER_EPOCH + 60, 14],
+    expect(JSON.parse(appendRowJson(first, [1_785_542_460, 14]))).toEqual([
+      [1_785_542_400, 12, 7],
+      [1_785_542_460, 14],
     ]);
-    expect(() => appendRowJson("not-json", [ROW_JSON_CUTOVER_EPOCH, 1]))
+    expect(() => appendRowJson("not-json", [1_785_542_400, 1]))
       .toThrow("closing bracket");
   });
 
@@ -150,7 +148,7 @@ describe("scheduled stats append", () => {
 
   it("appends to an existing monthly object without sorting it", async () => {
     const bucket = new FakeBucket();
-    bucket.objects.set("stats/jsonl/2026-07.jsonl", "[1783037100,12]\n[1783036500,8]\n");
+    bucket.objects.set("stats/json/2026-07.json", "[[1783037100,12],[1783036500,8]]");
     const fetcher = responsesWith(
       { usercount: 0, uniquecount: 0 },
       { usercount: 0, uniquecount: 0 },
@@ -163,10 +161,10 @@ describe("scheduled stats append", () => {
       retryDelayMs: 0,
     });
 
-    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe(
-      "[1783037100,12]\n[1783036500,8]\n[1783036860,0,0]\n",
+    expect(bucket.objects.get("stats/json/2026-07.json")).toBe(
+      "[[1783037100,12],[1783036500,8],[1783036860,0,0]]",
     );
-    expect(bucket.gets).toEqual(["stats/jsonl/2026-07.jsonl"]);
+    expect(bucket.gets).toEqual(["stats/json/2026-07.json"]);
     expect(result).toEqual({
       fetchedAt: "2026-07-03T00:01:00.000Z",
       timestamp: 1_783_036_860,
@@ -187,7 +185,7 @@ describe("scheduled stats append", () => {
     });
 
     expect(fetcher).toHaveBeenCalledTimes(2);
-    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe("[1783036860,12,7]\n");
+    expect(bucket.objects.get("stats/json/2026-07.json")).toBe("[[1783036860,12,7]]");
     expect(result.data).toEqual([1_783_036_860, 12, 7]);
   });
 
@@ -240,7 +238,7 @@ describe("scheduled stats append", () => {
     });
 
     expect(fetcher).toHaveBeenCalledTimes(3);
-    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe("[1783036860,1597]\n");
+    expect(bucket.objects.get("stats/json/2026-07.json")).toBe("[[1783036860,1597]]");
     expect(result.data).toEqual([1_783_036_860, 1597]);
   });
 
@@ -259,7 +257,7 @@ describe("scheduled stats append", () => {
     });
 
     expect(fetcher).toHaveBeenCalledTimes(3);
-    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe("[1783036860,5]\n");
+    expect(bucket.objects.get("stats/json/2026-07.json")).toBe("[[1783036860,5]]");
     expect(result.data).toEqual([1_783_036_860, 5]);
   });
 
@@ -283,7 +281,7 @@ describe("scheduled stats append", () => {
     });
 
     expect(fetcher).toHaveBeenCalledTimes(3);
-    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe("[1783036860,5]\n");
+    expect(bucket.objects.get("stats/json/2026-07.json")).toBe("[[1783036860,5]]");
     expect(result.data).toEqual([1_783_036_860, 5]);
   });
 
@@ -302,7 +300,7 @@ describe("scheduled stats append", () => {
     });
 
     expect(fetcher).toHaveBeenCalledTimes(3);
-    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe("[1783036860,null,7]\n");
+    expect(bucket.objects.get("stats/json/2026-07.json")).toBe("[[1783036860,null,7]]");
     expect(result.data).toEqual([1_783_036_860, null, 7]);
   });
 
@@ -322,7 +320,7 @@ describe("scheduled stats append", () => {
     });
 
     expect(fetcher).toHaveBeenCalledTimes(2);
-    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe("[1783036860,12,7]\n");
+    expect(bucket.objects.get("stats/json/2026-07.json")).toBe("[[1783036860,12,7]]");
     expect(result.data).toEqual([1_783_036_860, 12, 7]);
   });
 
@@ -343,7 +341,7 @@ describe("scheduled stats append", () => {
     });
 
     expect(fetcher).toHaveBeenCalledTimes(3);
-    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe("[1783036860,0,0]\n");
+    expect(bucket.objects.get("stats/json/2026-07.json")).toBe("[[1783036860,0,0]]");
     expect(result.data).toEqual([1_783_036_860, 0, 0]);
   });
 
@@ -374,11 +372,11 @@ describe("scheduled stats append", () => {
       retryDelayMs: 0,
     });
 
-    expect(bucket.gets).toEqual(["stats/jsonl/2026-07.jsonl"]);
-    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe("[1783036860,5,3]\n");
+    expect(bucket.gets).toEqual(["stats/json/2026-07.json"]);
+    expect(bucket.objects.get("stats/json/2026-07.json")).toBe("[[1783036860,5,3]]");
   });
 
-  it("creates row-based JSON at the exact cutover instant", async () => {
+  it("creates row-based JSON in a later month", async () => {
     const bucket = new FakeBucket();
 
     await appendStats(createEnv(bucket), {
@@ -410,7 +408,7 @@ describe("scheduled stats append", () => {
     ]);
   });
 
-  it("rejects post-cutover objects without a final closing bracket", async () => {
+  it("rejects monthly objects without a final closing bracket", async () => {
     const bucket = new FakeBucket();
     bucket.objects.set("stats/json/2026-08.json", "[[1785542400,5,3");
 
@@ -424,7 +422,7 @@ describe("scheduled stats append", () => {
 
   it("appends the first row directly to an empty monthly object", async () => {
     const bucket = new FakeBucket();
-    bucket.objects.set("stats/jsonl/2026-07.jsonl", "");
+    bucket.objects.set("stats/json/2026-07.json", "");
 
     await appendStats(createEnv(bucket), {
       now: new Date("2026-07-03T00:01:00.000Z"),
@@ -432,31 +430,12 @@ describe("scheduled stats append", () => {
       retryDelayMs: 0,
     });
 
-    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe("[1783036860,5,3]\n");
-  });
-
-  it.each([
-    "not-json\n",
-    "[1783036800,-1]\n",
-    "{\"timestamp\":1783036800,\"usercount\":1}",
-  ])("preserves existing content without parsing it", async (existing) => {
-    const bucket = new FakeBucket();
-    bucket.objects.set("stats/jsonl/2026-07.jsonl", existing);
-
-    await appendStats(createEnv(bucket), {
-      now: new Date("2026-07-03T00:01:00.000Z"),
-      fetcher: responseWith({ usercount: 12, uniquecount: 7 }),
-      retryDelayMs: 0,
-    });
-
-    const separator = existing.endsWith("\n") ? "" : "\n";
-    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl"))
-      .toBe(`${existing}${separator}[1783036860,12,7]\n`);
+    expect(bucket.objects.get("stats/json/2026-07.json")).toBe("[[1783036860,5,3]]");
   });
 
   it("appends duplicate timestamps instead of replacing them", async () => {
     const bucket = new FakeBucket();
-    bucket.objects.set("stats/jsonl/2026-07.jsonl", "[1783036860,5,3]\n");
+    bucket.objects.set("stats/json/2026-07.json", "[[1783036860,5,3]]");
 
     await appendStats(createEnv(bucket), {
       now: new Date("2026-07-03T00:01:00.000Z"),
@@ -464,8 +443,8 @@ describe("scheduled stats append", () => {
       retryDelayMs: 0,
     });
 
-    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl"))
-      .toBe("[1783036860,5,3]\n[1783036860,12,7]\n");
+    expect(bucket.objects.get("stats/json/2026-07.json"))
+      .toBe("[[1783036860,5,3],[1783036860,12,7]]");
   });
 });
 

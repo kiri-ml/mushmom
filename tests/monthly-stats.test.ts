@@ -8,7 +8,6 @@ const repoRoot = path.join(__dirname, "..");
 type R2BucketStub = {
   get: (key: string) => Promise<{
     body: ReadableStream<Uint8Array>;
-    text: () => Promise<string>;
   } | null>;
 };
 
@@ -39,7 +38,6 @@ function makeR2Bucket(objects: Record<string, string> = {}): R2BucketStub {
       const value = objects[key];
       return value === undefined ? null : {
         body: new Response(value).body as ReadableStream<Uint8Array>,
-        async text() { return value; },
       };
     },
   };
@@ -85,11 +83,11 @@ describe("monthly stats function", () => {
     },
   );
 
-  it("reads the requested monthly JSONL object directly", async () => {
+  it("streams the migrated July monthly JSON object directly", async () => {
     const mod = await loadMonthlyModule();
     const cache = stubCache();
     const bucket = makeR2Bucket({
-      "stats/jsonl/2026-07.jsonl": "[1782864000,1200]\n[1782864300,1250,625]\n[1782864600,null,630]\n",
+      "stats/json/2026-07.json": "[[1782864000,1200],[1782864300,1250,625],[1782864600,null,630]]",
     });
     const get = vi.spyOn(bucket, "get");
 
@@ -101,7 +99,7 @@ describe("monthly stats function", () => {
       [1782864300, 1250, 625],
       [1782864600, null, 630],
     ]);
-    expect(get).toHaveBeenCalledWith("stats/jsonl/2026-07.jsonl");
+    expect(get).toHaveBeenCalledWith("stats/json/2026-07.json");
     expect(cache.put).toHaveBeenCalledOnce();
   });
 
@@ -180,22 +178,12 @@ describe("monthly stats function", () => {
     });
   });
 
-  it("returns uncached errors for malformed JSONL and a missing binding", async () => {
+  it("returns an uncached error for a missing binding", async () => {
     const mod = await loadMonthlyModule();
     stubCache();
 
-    const malformed = await mod.onRequestGet(makeContext(
-      "2026-07",
-      makeR2Bucket({ "stats/jsonl/2026-07.jsonl": "not-json\n" }),
-    ));
     const unconfigured = await mod.onRequestGet(makeContext("2026-07", null));
 
-    expect(malformed.status).toBe(502);
-    expect(malformed.headers.get("cache-control")).toBe("no-store");
-    await expect(malformed.json()).resolves.toEqual({
-      error: "Invalid R2 JSONL in stats/jsonl/2026-07.jsonl at line 1: malformed JSON.",
-      data: [],
-    });
     expect(unconfigured.status).toBe(503);
     expect(unconfigured.headers.get("cache-control")).toBe("no-store");
     await expect(unconfigured.json()).resolves.toEqual({
@@ -204,7 +192,7 @@ describe("monthly stats function", () => {
     });
   });
 
-  it("streams post-cutover R2 bytes without parsing or rewriting them", async () => {
+  it("streams monthly R2 bytes without parsing or rewriting them", async () => {
     const mod = await loadMonthlyModule();
     stubCache();
     const contents = "{not validated or rewritten}\n";

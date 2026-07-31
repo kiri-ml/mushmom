@@ -1,18 +1,11 @@
-const R2_JSONL_PREFIX = "stats/jsonl/";
 const R2_JSON_PREFIX = "stats/json/";
-const ROW_JSON_CUTOVER_MONTH = "2026-08";
 const OPEN_MONTH_CACHE_CONTROL = "public, max-age=60, s-maxage=300";
 const CLOSED_MONTH_CACHE_CONTROL =
   "public, max-age=31536000, s-maxage=31536000, immutable";
 const MONTH_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
 
-export type StatsRow = [epochSeconds: number, usercount: number]
-  | [epochSeconds: number, usercount: number, uniquecount: number]
-  | [epochSeconds: number, usercount: null, uniquecount: number];
-
 type R2ObjectBodyLike = {
   body: ReadableStream<Uint8Array>;
-  text(): Promise<string>;
 };
 
 type R2BucketLike = {
@@ -56,9 +49,7 @@ export async function onRequestGet(context: PagesContext): Promise<Response> {
 
   try {
     const cacheControl = cacheControlForMonth(month);
-    const response = month >= ROW_JSON_CUTOVER_MONTH
-      ? await fetchMonthlyJsonResponse(bucket, month, cacheControl)
-      : json(await fetchMonthlyJsonlRows(bucket, month), 200, cacheControl);
+    const response = await fetchMonthlyJsonResponse(bucket, month, cacheControl);
 
     context.waitUntil(
       cache.put(cacheKey, response.clone()).catch(() => {
@@ -77,12 +68,6 @@ export async function onRequestGet(context: PagesContext): Promise<Response> {
   }
 }
 
-async function fetchMonthlyJsonlRows(bucket: R2BucketLike, month: string): Promise<StatsRow[]> {
-  const key = `${R2_JSONL_PREFIX}${month}.jsonl`;
-  const body = await bucket.get(key);
-  return body ? parseR2Jsonl(await body.text(), key) : [];
-}
-
 async function fetchMonthlyJsonResponse(
   bucket: R2BucketLike,
   month: string,
@@ -95,39 +80,6 @@ async function fetchMonthlyJsonResponse(
       "cache-control": cacheControl,
     },
   });
-}
-
-function parseR2Jsonl(text: string, key: string): StatsRow[] {
-  const trimmed = text.trim();
-  if (!trimmed) return [];
-
-  return trimmed.split(/\r?\n/).map((line, index) => {
-    let row: unknown;
-    try {
-      row = JSON.parse(line) as unknown;
-    } catch {
-      throw new Error(`Invalid R2 JSONL in ${key} at line ${index + 1}: malformed JSON.`);
-    }
-
-    if (!isStatsRow(row)) {
-      throw new Error(`Invalid R2 JSONL in ${key} at line ${index + 1}: expected a two- or three-value stats row.`);
-    }
-    return row;
-  });
-}
-
-function isStatsRow(row: unknown): row is StatsRow {
-  if (!Array.isArray(row) || (row.length !== 2 && row.length !== 3)
-    || !isNonnegativeInteger(row[0])) return false;
-  if (row[1] === null) {
-    return row.length === 3 && isNonnegativeInteger(row[2]) && row[2] > 0;
-  }
-  return isNonnegativeInteger(row[1])
-    && (row.length === 2 || isNonnegativeInteger(row[2]));
-}
-
-function isNonnegativeInteger(value: unknown): value is number {
-  return Number.isSafeInteger(value) && Number(value) >= 0;
 }
 
 function cacheControlForMonth(month: string, now = new Date()): string {
@@ -150,11 +102,8 @@ function json(body: unknown, status = 200, cacheControl = OPEN_MONTH_CACHE_CONTR
 }
 
 export const testApi = {
-  R2_JSONL_PREFIX,
   OPEN_MONTH_CACHE_CONTROL,
   CLOSED_MONTH_CACHE_CONTROL,
   cacheControlForMonth,
   normalizeCacheUrl,
-  fetchMonthlyRows: fetchMonthlyJsonlRows,
-  parseR2Jsonl,
 };
