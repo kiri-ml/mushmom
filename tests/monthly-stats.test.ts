@@ -83,7 +83,7 @@ describe("monthly stats function", () => {
     const mod = await loadMonthlyModule();
     const cache = stubCache();
     const bucket = makeR2Bucket({
-      "stats/jsonl/2026-07.jsonl": "[1782864000,1200]\n[1782864300,1250,625]\n",
+      "stats/jsonl/2026-07.jsonl": "[1782864000,1200]\n[1782864300,1250,625]\n[1782864600,null,630]\n",
     });
     const get = vi.spyOn(bucket, "get");
 
@@ -93,6 +93,7 @@ describe("monthly stats function", () => {
     await expect(response.json()).resolves.toEqual([
       [1782864000, 1200],
       [1782864300, 1250, 625],
+      [1782864600, null, 630],
     ]);
     expect(get).toHaveBeenCalledWith("stats/jsonl/2026-07.jsonl");
     expect(cache.put).toHaveBeenCalledOnce();

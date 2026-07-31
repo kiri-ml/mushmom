@@ -1,5 +1,6 @@
 export type StatsRow = [epochSeconds: number, usercount: number]
-  | [epochSeconds: number, usercount: number, uniquecount: number];
+  | [epochSeconds: number, usercount: number, uniquecount: number]
+  | [epochSeconds: number, usercount: null, uniquecount: number];
 
 const POLL_RETRY_DELAY_MS = 1_000;
 const MAX_POLL_ATTEMPTS = 3;
@@ -72,10 +73,12 @@ export function monthlyKey(bucket: number): string {
 }
 
 export function isStatsRow(value: unknown): value is StatsRow {
-  return Array.isArray(value)
-    && (value.length === 2 || value.length === 3)
-    && isNonnegativeInteger(value[0])
-    && isNonnegativeInteger(value[1])
+  if (!Array.isArray(value) || (value.length !== 2 && value.length !== 3)
+    || !isNonnegativeInteger(value[0])) return false;
+  if (value[1] === null) {
+    return value.length === 3 && isNonnegativeInteger(value[2]) && value[2] > 0;
+  }
+  return isNonnegativeInteger(value[1])
     && (value.length === 2 || isNonnegativeInteger(value[2]));
 }
 
@@ -92,7 +95,7 @@ export function parseJsonl(text: string): StatsRow[] {
     }
 
     if (!isStatsRow(value)) {
-      throw new Error(`Invalid stats JSONL at line ${index + 1}: expected [epochSeconds, usercount] or [epochSeconds, usercount, uniquecount].`);
+      throw new Error(`Invalid stats JSONL at line ${index + 1}: expected a compact stats tuple, with null usercount allowed only when uniquecount is positive.`);
     }
     return value;
   });
@@ -133,6 +136,13 @@ function isNonnegativeInteger(value: unknown): value is number {
 }
 
 type UserCounts = { usercount: number; uniquecount: number };
+
+function createStatsRow(timestamp: number, usercount: number, uniquecount?: number): StatsRow {
+  if (uniquecount === undefined) return [timestamp, usercount];
+  return usercount === 0 && uniquecount > 0
+    ? [timestamp, null, uniquecount]
+    : [timestamp, usercount, uniquecount];
+}
 
 function hasCommonCounts(counts: UserCounts): boolean {
   return counts.usercount > 0 && counts.uniquecount > 0;
@@ -253,9 +263,9 @@ export async function syncStats(env: Env, options: SyncOptions = {}): Promise<Sy
   const retryDelayMs = options.retryDelayMs ?? POLL_RETRY_DELAY_MS;
 
   const { usercount, uniquecount } = await readCurrentUsercounts(env.CURRENT_USERS_URL, fetcher, retryDelayMs);
-  const data: StatsRow = hasCharacterCountOnly({ usercount, uniquecount })
-    ? [bucket, usercount]
-    : [bucket, usercount, uniquecount];
+  const data = hasCharacterCountOnly({ usercount, uniquecount })
+    ? createStatsRow(bucket, usercount)
+    : createStatsRow(bucket, usercount, uniquecount);
 
   const key = monthlyKey(bucket);
   let existing: R2ObjectBodyLike | null;
@@ -292,9 +302,7 @@ export async function syncStats(env: Env, options: SyncOptions = {}): Promise<Sy
 export async function updateStatsPoint(env: Env, timestamp: number, usercount: number, uniquecount?: number): Promise<UpdatePointResult> {
   const interval = readInterval(env);
   const bucket = bucketTimestamp(timestamp, interval);
-  const data: StatsRow = uniquecount === undefined
-    ? [bucket, usercount]
-    : [bucket, usercount, uniquecount];
+  const data = createStatsRow(bucket, usercount, uniquecount);
   if (!isStatsRow(data)) throw new SyncError("Request counts must be finite non-negative integers.", 400);
 
   const key = monthlyKey(bucket);

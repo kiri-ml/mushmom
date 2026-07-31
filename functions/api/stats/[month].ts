@@ -6,7 +6,8 @@ const CLOSED_MONTH_CACHE_CONTROL =
 const MONTH_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
 
 export type StatsRow = [epochSeconds: number, usercount: number]
-  | [epochSeconds: number, usercount: number, uniquecount: number];
+  | [epochSeconds: number, usercount: number, uniquecount: number]
+  | [epochSeconds: number, usercount: null, uniquecount: number];
 
 type R2ObjectBodyLike = {
   text(): Promise<string>;
@@ -98,10 +99,12 @@ function parseR2Jsonl(text: string, key: string): StatsRow[] {
 }
 
 function isStatsRow(row: unknown): row is StatsRow {
-  return Array.isArray(row)
-    && (row.length === 2 || row.length === 3)
-    && isNonnegativeInteger(row[0])
-    && isNonnegativeInteger(row[1])
+  if (!Array.isArray(row) || (row.length !== 2 && row.length !== 3)
+    || !isNonnegativeInteger(row[0])) return false;
+  if (row[1] === null) {
+    return row.length === 3 && isNonnegativeInteger(row[2]) && row[2] > 0;
+  }
+  return isNonnegativeInteger(row[1])
     && (row.length === 2 || isNonnegativeInteger(row[2]));
 }
 

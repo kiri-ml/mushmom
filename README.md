@@ -11,8 +11,9 @@ The app fetches:
 
 It visualizes the time series with Apache ECharts.
 
-The deterministic archive format is documented in
-[`docs/archive-schema-v2.md`](docs/archive-schema-v2.md).
+The current deterministic archive format is documented in
+[`docs/archive-schema-v3.md`](docs/archive-schema-v3.md). The loader also
+supports the previous [`schema v2`](docs/archive-schema-v2.md) format.
 
 ## Data Shape
 
@@ -125,6 +126,10 @@ the zero-padded UTC format, for example `/api/stats/2026-07`. Successful
 responses are JSON arrays of legacy `[epochSeconds, usercount]` or new
 `[epochSeconds, usercount, uniquecount]` rows in ascending order. Each month is
 stored as `stats/jsonl/YYYY-MM.jsonl`; a month with no object returns `[]`.
+
+If the observer reports a zero character count with a positive unique count,
+the stored row is `[epochSeconds, null, uniquecount]`; null marks the character
+count as unavailable rather than recording a false zero.
 
 In these wire-format rows, `usercount` stores online characters and
 `uniquecount` stores estimated players identified by IP. These field names and

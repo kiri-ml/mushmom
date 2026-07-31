@@ -24,8 +24,11 @@ interface MushmomI18nApi {
   readonly localeLabels: Record<string, string>;
 }
 interface StatsManifestChunk { period: string; granularity: "month" | "year"; file: string; minTimestamp: number; maxTimestamp: number; rowCount: number; }
-interface StatsManifestFormat { rowShape: ["epochSeconds", "usercount"] | ["epochSeconds", "usercount", "uniquecount?"]; timestampUnit: "seconds"; order: "ascending"; }
-interface StatsManifest { schemaVersion: 2; dataset: "maplelegends-online-users"; archiveThroughPeriod: string; format: StatsManifestFormat; chunks: StatsManifestChunk[]; }
+interface StatsManifestFormatV2 { rowShape: ["epochSeconds", "usercount"] | ["epochSeconds", "usercount", "uniquecount?"]; timestampUnit: "seconds"; order: "ascending"; }
+interface StatsManifestFormatV3 { rowShape: ["timestampDeltaSeconds", "usercountDelta"] | ["timestampDeltaSeconds", "usercountDelta", "uniquecountDelta?"]; timestampUnit: "seconds"; order: "ascending"; }
+type StatsManifest =
+  | { schemaVersion: 2; dataset: "maplelegends-online-users"; archiveThroughPeriod: string; format: StatsManifestFormatV2; chunks: StatsManifestChunk[] }
+  | { schemaVersion: 3; dataset: "maplelegends-online-users"; archiveThroughPeriod: string; format: StatsManifestFormatV3; chunks: StatsManifestChunk[] };
 type RawPayloadRow = [unknown, unknown] | [unknown, unknown, unknown] | { timestamp?: unknown; time?: unknown; created_at?: unknown; date?: unknown; usercount?: unknown; uniquecount?: unknown; users?: unknown; players?: unknown; count?: unknown; };
 type StatsPayload = RawPayloadRow[] | { data?: RawPayloadRow[]; values?: RawPayloadRow[]; source?: string; sourceUrl?: string | null; };
 interface InitialStatsHistoryResult<TPoint> { points: TPoint[]; recentPayload: StatsPayload; manifest: StatsManifest; }

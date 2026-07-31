@@ -8,7 +8,8 @@ const DEFAULT_ARCHIVE_BASE_URL = "/assets/stats/";
 const MANIFEST_KEYS = ["schemaVersion", "dataset", "archiveThroughPeriod", "format", "chunks"];
 const FORMAT_KEYS = ["rowShape", "timestampUnit", "order"];
 const ENTRY_KEYS = ["period", "granularity", "file", "minTimestamp", "maxTimestamp", "rowCount"];
-const CHUNK_KEYS = ["schemaVersion", "period", "data"];
+const CHUNK_KEYS_V2 = ["schemaVersion", "period", "data"];
+const CHUNK_KEYS_V3 = ["schemaVersion", "period", "timestampBase", "data"];
 
 type HistoryFetcher = (url: string) => Promise<unknown>;
 type NormalizePayload<TPoint> = (payload: StatsPayload) => TPoint[];
@@ -39,7 +40,7 @@ async function loadInitialStatsHistory<TPoint>(options: LoadInitialStatsHistoryO
   const newest = manifest.chunks[0];
   const [recentPayload, newestPoints] = await Promise.all([
     loadRecentPayload({ statsApiBaseUrl, manifest, fetcher }),
-    newest ? loadArchiveChunk({ archiveBaseUrl, fetcher, normalizePayload: options.normalizePayload }, newest) : Promise.resolve([]),
+    newest ? loadArchiveChunk({ archiveBaseUrl, fetcher, normalizePayload: options.normalizePayload }, newest, manifest.schemaVersion) : Promise.resolve([]),
   ]);
   const points = [...newestPoints, ...options.normalizePayload(recentPayload)];
   if (points.length === 0) throw new Error("Stats history contained no usable points.");
@@ -76,7 +77,7 @@ async function loadArchiveChunks<TPoint>(options: LoadArchiveChunksOptions<TPoin
   const chunks = selectValidatedArchiveChunks(options.manifest, options.recentPayload);
   const points = chunks.length === 0
     ? []
-    : (await Promise.all(chunks.map((chunk) => loadArchiveChunk(options, chunk)))).flat();
+    : (await Promise.all(chunks.map((chunk) => loadArchiveChunk(options, chunk, options.manifest.schemaVersion)))).flat();
   const result = { points, chunks };
   options.onArchive?.(result);
   return result;
@@ -105,14 +106,14 @@ function selectValidatedArchiveChunks(manifest: StatsManifest, recentPayload: St
     : remaining;
 }
 
-async function loadArchiveChunk<TPoint>(options: ArchiveFetchOptions<TPoint>, entry: StatsManifestChunk): Promise<TPoint[]> {
+async function loadArchiveChunk<TPoint>(options: ArchiveFetchOptions<TPoint>, entry: StatsManifestChunk, schemaVersion: 2 | 3): Promise<TPoint[]> {
   const payload = await options.fetcher(archivePath(options.archiveBaseUrl, entry.file));
-  return options.normalizePayload(validateChunk(payload, entry));
+  return options.normalizePayload(validateChunk(payload, entry, schemaVersion));
 }
 
 function validateManifest(value: unknown): StatsManifest {
-  if (!isRecord(value) || value.schemaVersion !== 2) {
-    throw new Error("Stats manifest must use schemaVersion 2.");
+  if (!isRecord(value) || (value.schemaVersion !== 2 && value.schemaVersion !== 3)) {
+    throw new Error("Stats manifest must use schemaVersion 2 or 3.");
   }
   requireExactKeys(value, MANIFEST_KEYS, "Stats manifest");
   if (value.dataset !== "maplelegends-online-users" || !isMonthKey(value.archiveThroughPeriod)) {
@@ -122,10 +123,13 @@ function validateManifest(value: unknown): StatsManifest {
   if (!isRecord(value.format)) throw new Error("Stats manifest has an invalid format.");
   requireExactKeys(value.format, FORMAT_KEYS, "Stats manifest format");
   const rowShape = value.format.rowShape;
+  const expectedRowShape = value.schemaVersion === 2
+    ? ["epochSeconds", "usercount", "uniquecount?"]
+    : ["timestampDeltaSeconds", "usercountDelta", "uniquecountDelta?"];
   const validRowShape = Array.isArray(rowShape)
-    && rowShape[0] === "epochSeconds"
-    && rowShape[1] === "usercount"
-    && (rowShape.length === 2 || (rowShape.length === 3 && rowShape[2] === "uniquecount?"));
+    && rowShape[0] === expectedRowShape[0]
+    && rowShape[1] === expectedRowShape[1]
+    && (rowShape.length === 2 || (rowShape.length === 3 && rowShape[2] === expectedRowShape[2]));
   if (!validRowShape
     || value.format.timestampUnit !== "seconds" || value.format.order !== "ascending") {
     throw new Error("Stats manifest has an invalid format.");
@@ -175,25 +179,68 @@ function validateManifestPartition(value: unknown): StatsManifest {
   return manifest;
 }
 
-function validateChunk(value: unknown, entry: StatsManifestChunk): StatsPayload {
-  if (!isRecord(value) || value.schemaVersion !== 2) throw new Error(`Stats chunk ${entry.file} must use schemaVersion 2.`);
-  requireExactKeys(value, CHUNK_KEYS, `Stats chunk ${entry.file}`);
+function validateChunk(value: unknown, entry: StatsManifestChunk, expectedSchemaVersion?: 2 | 3): StatsPayload {
+  if (!isRecord(value) || (value.schemaVersion !== 2 && value.schemaVersion !== 3)) {
+    throw new Error(`Stats chunk ${entry.file} must use schemaVersion 2 or 3.`);
+  }
+  if (expectedSchemaVersion !== undefined && value.schemaVersion !== expectedSchemaVersion) {
+    throw new Error(`Stats chunk ${entry.file} schemaVersion does not match its manifest.`);
+  }
+  requireExactKeys(value, value.schemaVersion === 2 ? CHUNK_KEYS_V2 : CHUNK_KEYS_V3, `Stats chunk ${entry.file}`);
   if (value.period !== entry.period || !Array.isArray(value.data) || value.data.length !== entry.rowCount) {
     throw new Error(`Stats chunk ${entry.file} does not match its manifest entry.`);
   }
+  const rows = value.schemaVersion === 2
+    ? value.data
+    : decodeDeltaRows(value, entry);
   let previous = -1;
-  for (const row of value.data) {
-    if (!isStatsTuple(row) || row[0] <= previous) {
+  for (const row of rows) {
+    const rowValid = value.schemaVersion === 2 ? isAbsoluteStatsTuple(row) : isDecodedStatsTuple(row);
+    if (!rowValid || row[0] <= previous) {
       throw new Error(`Stats chunk ${entry.file} contains invalid or unordered rows.`);
     }
     const rowPeriod = periodForTimestamp(row[0], entry.granularity === "year" ? 4 : 7);
     if (rowPeriod !== entry.period) throw new Error(`Stats chunk ${entry.file} contains a row outside its period.`);
     previous = row[0];
   }
-  if (value.data[0]?.[0] !== entry.minTimestamp || value.data.at(-1)?.[0] !== entry.maxTimestamp) {
+  if (rows[0]?.[0] !== entry.minTimestamp || rows.at(-1)?.[0] !== entry.maxTimestamp) {
     throw new Error(`Stats chunk ${entry.file} bounds do not match its manifest entry.`);
   }
-  return value as StatsPayload;
+  return value.schemaVersion === 2 ? value as StatsPayload : { data: rows as RawPayloadRow[] };
+}
+
+function decodeDeltaRows(value: Record<string, unknown>, entry: StatsManifestChunk): unknown[] {
+  if (!isNonnegativeInteger(value.timestampBase) || !Array.isArray(value.data)) {
+    throw new Error(`Stats chunk ${entry.file} has an invalid timestamp base.`);
+  }
+  let timestamp = value.timestampBase;
+  let usercount = 0;
+  let uniquecount = 0;
+  return value.data.map((row, index) => {
+    if (!isDeltaStatsTuple(row) || (index === 0 ? row[0] !== 0 : row[0] <= 0)) {
+      throw new Error(`Stats chunk ${entry.file} contains invalid encoded deltas.`);
+    }
+    if (index > 0) timestamp += row[0];
+    if (!Number.isSafeInteger(timestamp)) {
+      throw new Error(`Stats chunk ${entry.file} contains a timestamp overflow.`);
+    }
+    const decoded: Array<number | null> = [timestamp, null];
+    if (row[1] !== null) {
+      usercount += row[1];
+      if (!isNonnegativeInteger(usercount)) {
+        throw new Error(`Stats chunk ${entry.file} contains an invalid decoded usercount.`);
+      }
+      decoded[1] = usercount;
+    }
+    if (row.length === 3 && row[2] !== null) {
+      uniquecount += row[2];
+      if (!isNonnegativeInteger(uniquecount)) {
+        throw new Error(`Stats chunk ${entry.file} contains an invalid decoded uniquecount.`);
+      }
+      decoded.push(uniquecount);
+    }
+    return decoded;
+  });
 }
 
 function requireExactKeys(value: Record<string, unknown>, expected: string[], label: string): void {
@@ -208,12 +255,27 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function isNonnegativeInteger(value: unknown): value is number { return Number.isSafeInteger(value) && Number(value) >= 0; }
-function isStatsTuple(value: unknown): value is [number, number] | [number, number, number] {
+function isAbsoluteStatsTuple(value: unknown): value is [number, number] | [number, number, number] {
   return Array.isArray(value)
     && (value.length === 2 || value.length === 3)
     && isNonnegativeInteger(value[0])
     && isNonnegativeInteger(value[1])
     && (value.length === 2 || isNonnegativeInteger(value[2]));
+}
+function isDecodedStatsTuple(value: unknown): value is [number, number | null] | [number, number | null, number] {
+  return Array.isArray(value)
+    && (value.length === 2 || value.length === 3)
+    && isNonnegativeInteger(value[0])
+    && (value[1] === null || isNonnegativeInteger(value[1]))
+    && (value.length === 2 || isNonnegativeInteger(value[2]));
+}
+function isSignedSafeInteger(value: unknown): value is number { return Number.isSafeInteger(value); }
+function isDeltaStatsTuple(value: unknown): value is [number, number | null] | [number, number | null, number | null] {
+  return Array.isArray(value)
+    && (value.length === 2 || value.length === 3)
+    && isNonnegativeInteger(value[0])
+    && (value[1] === null || isSignedSafeInteger(value[1]))
+    && (value.length === 2 || value[2] === null || isSignedSafeInteger(value[2]));
 }
 function parseMonthKey(month: string): { year: number; month: number } | null {
   if (!isMonthKey(month)) return null;

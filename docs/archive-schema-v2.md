@@ -3,6 +3,9 @@
 Schema v2 defines deterministic manifests and archive chunks for the
 `maplelegends-online-users` dataset.
 
+Schema v2 is retained as a reader-compatibility contract. New archives use
+[schema v3](archive-schema-v3.md).
+
 ## Manifest
 
 ```json

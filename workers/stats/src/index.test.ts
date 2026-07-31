@@ -77,9 +77,9 @@ describe("stats rows", () => {
   });
 
   it("parses and serializes compact JSONL tuples", () => {
-    const rows: StatsRow[] = [[300, 0], [600, 1234, 617]];
-    expect(parseJsonl("[300,0]\n[600,1234,617]\n")).toEqual(rows);
-    expect(serializeJsonl(rows)).toBe("[300,0]\n[600,1234,617]\n");
+    const rows: StatsRow[] = [[300, 0], [600, 1234, 617], [900, null, 450]];
+    expect(parseJsonl("[300,0]\n[600,1234,617]\n[900,null,450]\n")).toEqual(rows);
+    expect(serializeJsonl(rows)).toBe("[300,0]\n[600,1234,617]\n[900,null,450]\n");
     expect(parseJsonl("  \n")).toEqual([]);
   });
 
@@ -87,6 +87,9 @@ describe("stats rows", () => {
     expect(isStatsRow([300, 0])).toBe(true);
     expect(isStatsRow([300, 12])).toBe(true);
     expect(isStatsRow([300, 12, 6])).toBe(true);
+    expect(isStatsRow([300, null, 6])).toBe(true);
+    expect(isStatsRow([300, null, 0])).toBe(false);
+    expect(isStatsRow([300, null])).toBe(false);
     expect(isStatsRow([300, 12, -1])).toBe(false);
     expect(isStatsRow([300, 12, 1.5])).toBe(false);
     expect(isStatsRow([300, -1])).toBe(false);
@@ -307,8 +310,8 @@ describe("stats sync validation", () => {
     });
 
     expect(fetcher).toHaveBeenCalledTimes(3);
-    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe("[1783036800,0,7]\n");
-    expect(result.data).toEqual([1_783_036_800, 0, 7]);
+    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe("[1783036800,null,7]\n");
+    expect(result.data).toEqual([1_783_036_800, null, 7]);
   });
 
   it("writes the retried value when the initial fetch fails", async () => {
@@ -434,6 +437,15 @@ describe("manual stats point updates", () => {
 
     expect(result.data).toEqual([1_783_036_800, 42]);
     expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe("[1783036800,42]\n");
+  });
+
+  it("writes null usercount when a manual point has positive uniquecount only", async () => {
+    const bucket = new FakeBucket();
+
+    const result = await updateStatsPoint(createEnv(bucket), 1_783_036_979, 0, 21);
+
+    expect(result.data).toEqual([1_783_036_800, null, 21]);
+    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe("[1783036800,null,21]\n");
   });
 
   it("exposes an authenticated POST API for manual point updates", async () => {

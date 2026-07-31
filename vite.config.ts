@@ -76,8 +76,8 @@ function injectStartupHtml(html: string): string {
 }
 
 function buildApiPreloadTags(manifest: StatsManifest = readStatsManifest()): HtmlTagDescriptor[] {
-  if (manifest.schemaVersion !== 2 || !manifest.archiveThroughPeriod || !Array.isArray(manifest.chunks)) {
-    throw new Error("Stats manifest must use schemaVersion 2.");
+  if ((manifest.schemaVersion !== 2 && manifest.schemaVersion !== 3) || !manifest.archiveThroughPeriod || !Array.isArray(manifest.chunks)) {
+    throw new Error("Stats manifest must use schemaVersion 2 or 3.");
   }
   const firstRecentMonth = nextMonthKey(manifest.archiveThroughPeriod);
   const newestFile = manifest.chunks[0]?.file;

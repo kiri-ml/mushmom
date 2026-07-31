@@ -36,7 +36,7 @@ const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json
 const devScript = fs.readFileSync(path.join(repoRoot, "scripts/dev.cjs"), "utf8");
 const viteConfigSource = fs.readFileSync(path.join(repoRoot, "vite.config.ts"), "utf8");
 const statsManifest = JSON.parse(fs.readFileSync(path.join(repoRoot, "public/assets/stats/manifests.json"), "utf8")) as {
-  schemaVersion: 2;
+  schemaVersion: 2 | 3;
   archiveThroughPeriod: string;
   chunks: StatsManifestChunk[];
 };
@@ -182,7 +182,7 @@ async function loadStatsModule() {
 }
 
 type ArchiveManifest = StatsManifest;
-type ArchiveRow = [number, number] | [number, number, number];
+type ArchiveRow = [number, number | null] | [number, number | null, number | null];
 type StatsArchiveGenerator = {
   generateArchive: (payload: unknown, outputDir: string, r2Rows?: ArchiveRow[]) => { manifest: ArchiveManifest };
   readJsonlDirectory: (jsonlDir: string) => ArchiveRow[];
@@ -198,6 +198,16 @@ function makeManifest(chunks: StatsManifestChunk[], archiveThroughPeriod = "2026
     dataset: "maplelegends-online-users",
     archiveThroughPeriod,
     format: { rowShape: ["epochSeconds", "usercount"], timestampUnit: "seconds", order: "ascending" },
+    chunks,
+  };
+}
+
+function makeManifestV3(chunks: StatsManifestChunk[], archiveThroughPeriod = "2026-06"): StatsManifest {
+  return {
+    schemaVersion: 3,
+    dataset: "maplelegends-online-users",
+    archiveThroughPeriod,
+    format: { rowShape: ["timestampDeltaSeconds", "usercountDelta"], timestampUnit: "seconds", order: "ascending" },
     chunks,
   };
 }
@@ -347,7 +357,7 @@ describe("stats archive generator", () => {
   });
 
   it("enforces cutover ownership, excludes the open month, and resolves duplicates last", () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mushmom-v2-"));
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mushmom-v3-"));
     const generator = require(path.join(repoRoot, "scripts/generate_stats_archive.cjs")) as StatsArchiveGenerator;
     const result = generator.generateArchive({ data: [
       { timestamp: 1782864000, usercount: 999 },
@@ -359,7 +369,7 @@ describe("stats archive generator", () => {
     expect(result.manifest.archiveThroughPeriod).toBe("2026-06");
     const june = result.manifest.chunks.find((chunk) => chunk.period === "2026-06")!;
     const payload = JSON.parse(fs.readFileSync(path.join(tempDir, june.file), "utf8"));
-    expect(payload.data).toEqual([[1782863104, 11]]);
+    expect(payload).toEqual({ schemaVersion: 3, period: "2026-06", timestampBase: 1782863104, data: [[0, 11]] });
     expect(result.manifest.chunks.some((chunk) => chunk.period === "2026-07")).toBe(false);
   });
 
@@ -370,10 +380,33 @@ describe("stats archive generator", () => {
       { timestamp: "2026-06-30T23:45:04Z", usercount: 11 },
     ] }, tempDir, [[1782864000, 20], [1782864300, 21, 10], [1785542400, 22, 11]]);
 
-    expect(result.manifest.format.rowShape).toEqual(["epochSeconds", "usercount", "uniquecount?"]);
+    expect(result.manifest.format.rowShape).toEqual(["timestampDeltaSeconds", "usercountDelta", "uniquecountDelta?"]);
     const july = result.manifest.chunks.find((chunk) => chunk.period === "2026-07")!;
     const payload = JSON.parse(fs.readFileSync(path.join(tempDir, july.file), "utf8"));
-    expect(payload.data).toEqual([[1782864000, 20], [1782864300, 21, 10]]);
+    expect(payload).toEqual({
+      schemaVersion: 3,
+      period: "2026-07",
+      timestampBase: 1782864000,
+      data: [[0, 20], [300, 1, 10]],
+    });
+  });
+
+  it("encodes nullable count fields with independent zero-based state", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mushmom-null-counts-"));
+    const generator = require(path.join(repoRoot, "scripts/generate_stats_archive.cjs")) as StatsArchiveGenerator;
+    const result = generator.generateArchive({ data: [
+      { timestamp: "2026-06-30T23:45:04Z", usercount: null, users: 99, uniquecount: 7 },
+    ] }, tempDir, [
+      [1782864000, null, 5],
+      [1782864300, 10, null],
+      [1782864600, null, 8],
+      [1785542400, 1],
+    ]);
+    const july = result.manifest.chunks.find((chunk) => chunk.period === "2026-07")!;
+    const payload = JSON.parse(fs.readFileSync(path.join(tempDir, july.file), "utf8"));
+    expect(payload.data).toEqual([[0, null, 5], [300, 10], [300, null, 3]]);
+    const june = result.manifest.chunks.find((chunk) => chunk.period === "2026-06")!;
+    expect(JSON.parse(fs.readFileSync(path.join(tempDir, june.file), "utf8")).data).toEqual([[0, null, 7]]);
   });
 
   it("emits deterministic hashed bytes, monthly/annual partitions, and removes stale JSON", () => {
@@ -641,6 +674,7 @@ describe("app behavior", () => {
       { timestamp: "2020-06-24 18:00:04.796+00", usercount: -1 },
       [1776945603, 1459],
       [1776945903, 1500, 750],
+      [1776946203, null, 755],
     ]);
     expect(points.map((point) => point.characterCount)).toEqual([1832, 2125, 0, 1, 991, 1459, 1500]);
     expect(points.map((point) => point.playerCount)).toEqual([null, null, null, null, null, null, 750]);
@@ -871,7 +905,7 @@ describe("app behavior", () => {
   });
 });
 
-describe("stats loader schema v2", () => {
+describe("stats loader archive schemas", () => {
   const normalize = (payload: StatsPayload) => Array.isArray(payload)
     ? payload
     : Array.isArray(payload.data) ? payload.data : [];
@@ -910,6 +944,82 @@ describe("stats loader schema v2", () => {
     expect(result.points).toEqual([[1704067200, 1]]);
   });
 
+  it("decodes schema v3 timestamp and independent nullable count deltas", async () => {
+    const { module } = await loadStatsModule();
+    const newest = {
+      ...makeChunk("2026-06", 1782863104, 1782863404),
+      rowCount: 4,
+    };
+    const fetcher = vi.fn(async () => ({
+      schemaVersion: 3,
+      period: "2026-06",
+      timestampBase: 1782863104,
+      data: [[0, 10, 5], [100, null, 2], [100, -3, null], [100, 1, -1]],
+    }));
+    const result = await module.loadInitialStatsHistory({
+      manifest: makeManifestV3([newest]),
+      fetcher: async (url: string) => url.startsWith("/api/") ? [] : fetcher(),
+      normalizePayload: normalize,
+    });
+    expect(result.points).toEqual([
+      [1782863104, 10, 5],
+      [1782863204, null, 7],
+      [1782863304, 7],
+      [1782863404, 8, 6],
+    ]);
+  });
+
+  it("rejects malformed schema v3 bases, deltas, overflow, and schema mismatches", async () => {
+    const { module } = await loadStatsModule();
+    const entry = makeChunk("2026-06", 1782863104);
+    expect(() => module.validateChunk({
+      schemaVersion: 3, period: "2026-06", timestampBase: -1, data: [[0, 10]],
+    }, entry, 3)).toThrow("invalid timestamp base");
+    expect(() => module.validateChunk({
+      schemaVersion: 3, period: "2026-06", timestampBase: 1782863104, data: [[1, 10]],
+    }, entry, 3)).toThrow("invalid encoded deltas");
+    for (const delta of [0, -1, 1.5]) {
+      expect(() => module.validateChunk({
+        schemaVersion: 3,
+        period: "2026-06",
+        timestampBase: 1782863104,
+        data: [[0, 10], [delta, 11]],
+      }, { ...entry, rowCount: 2 }, 3)).toThrow("invalid encoded deltas");
+    }
+    for (const countDelta of [1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(() => module.validateChunk({
+        schemaVersion: 3,
+        period: "2026-06",
+        timestampBase: 1782863104,
+        data: [[0, countDelta]],
+      }, entry, 3)).toThrow("invalid encoded deltas");
+    }
+    expect(() => module.validateChunk({
+      schemaVersion: 3, period: "2026-06", timestampBase: 1782863104, data: [[0, -1]],
+    }, entry, 3)).toThrow("invalid decoded usercount");
+    expect(() => module.validateChunk({
+      schemaVersion: 3,
+      period: "2026-06",
+      timestampBase: 1782863104,
+      data: [[0, Number.MAX_SAFE_INTEGER], [1, 1]],
+    }, { ...entry, maxTimestamp: 1782863105, rowCount: 2 }, 3)).toThrow("invalid decoded usercount");
+    expect(() => module.validateChunk({
+      schemaVersion: 3, period: "2026-06", timestampBase: 1782863104, data: [[0, 0, -1]],
+    }, entry, 3)).toThrow("invalid decoded uniquecount");
+    expect(() => module.validateChunk({
+      schemaVersion: 3,
+      period: "2026-06",
+      timestampBase: 1782863104,
+      data: [[0, 0, Number.MAX_SAFE_INTEGER], [1, 0, 1]],
+    }, { ...entry, maxTimestamp: 1782863105, rowCount: 2 }, 3)).toThrow("invalid decoded uniquecount");
+    expect(() => module.validateChunk({
+      schemaVersion: 3, period: "2026-06", timestampBase: Number.MAX_SAFE_INTEGER, data: [[0, 10], [1, 11]],
+    }, { ...entry, rowCount: 2 }, 3)).toThrow("timestamp overflow");
+    expect(() => module.validateChunk({
+      schemaVersion: 2, period: "2026-06", data: [[1782863104, 10]],
+    }, entry, 3)).toThrow("does not match its manifest");
+  });
+
   it("supports an empty archive and rejects v1 manifests and chunks", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-05T00:00:00Z"));
@@ -924,14 +1034,14 @@ describe("stats loader schema v2", () => {
       manifest: { initial: {}, backfill: [] } as never,
       fetcher: async () => [],
       normalizePayload: normalize,
-    })).rejects.toThrow("schemaVersion 2");
+    })).rejects.toThrow("schemaVersion 2 or 3");
 
     const newest = makeChunk("2026-06", 1782863104);
     await expect(module.loadInitialStatsHistory({
       manifest: makeManifest([newest]),
       fetcher: async (url: string) => url.startsWith("/api/") ? [] : { period: newest.period, data: [[1782863104, 10]] },
       normalizePayload: normalize,
-    })).rejects.toThrow("schemaVersion 2");
+    })).rejects.toThrow("schemaVersion 2 or 3");
   });
 
   it("enforces yearly-in-February archive partitioning outside runtime manifest validation", async () => {
@@ -953,5 +1063,10 @@ describe("stats loader schema v2", () => {
 
     expect(module.validateManifestPartition(publicManifest).chunks.map((chunk) => chunk.period)).toEqual(statsManifest.chunks.map((chunk) => chunk.period));
     expect(module.validateManifestPartition(bundledManifest).chunks.map((chunk) => chunk.period)).toEqual(statsManifest.chunks.map((chunk) => chunk.period));
+    expect(publicManifest.schemaVersion).toBe(3);
+    for (const chunk of publicManifest.chunks as StatsManifestChunk[]) {
+      const payload = JSON.parse(fs.readFileSync(path.join(repoRoot, "public/assets/stats", chunk.file), "utf8"));
+      expect(module.validateChunk(payload, chunk, 3)).toHaveProperty("data");
+    }
   });
 });

@@ -35,7 +35,22 @@ function generateArchive(legacyPayload, outputDir, r2InputRows = []) {
 
   fs.mkdirSync(outputDir, { recursive: true });
   const chunks = chunkGroups.map(({ period, granularity, rows: chunkRows }) => {
-    const body = serializeJson({ schemaVersion: 2, period, data: chunkRows });
+    const timestampBase = chunkRows[0][0];
+    let previousUsercount = 0;
+    let previousUniquecount = 0;
+    const data = chunkRows.map((row, index) => {
+      const encoded = [
+        index === 0 ? 0 : row[0] - chunkRows[index - 1][0],
+        row[1] === null ? null : row[1] - previousUsercount,
+      ];
+      if (row[1] !== null) previousUsercount = row[1];
+      if (row.length === 3 && row[2] !== null) {
+        encoded.push(row[2] - previousUniquecount);
+        previousUniquecount = row[2];
+      }
+      return encoded;
+    });
+    const body = serializeJson({ schemaVersion: 3, period, timestampBase, data });
     const token = crypto.createHash("sha256").update(body).digest().subarray(0, 6).toString("base64url");
     const file = `${period}.${token}.json`;
     fs.writeFileSync(path.join(outputDir, file), body);
@@ -50,11 +65,11 @@ function generateArchive(legacyPayload, outputDir, r2InputRows = []) {
   });
 
   const manifest = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     dataset: DATASET,
     archiveThroughPeriod,
     format: {
-      rowShape: ["epochSeconds", "usercount", "uniquecount?"],
+      rowShape: ["timestampDeltaSeconds", "usercountDelta", "uniquecountDelta?"],
       timestampUnit: "seconds",
       order: "ascending",
     },
@@ -73,12 +88,13 @@ function normalizeLegacyRows(rows) {
       throw new Error(`Invalid legacy row ${index + 1}: expected an object.`);
     }
     const timestamp = row.timestamp ?? row.time ?? row.created_at ?? row.date;
-    const usercount = row.usercount ?? row.users ?? row.players ?? row.count;
+    const usercount = firstDefined(row.usercount, row.users, row.players, row.count);
+    const uniquecount = row.uniquecount ?? null;
     const epoch = parseTimestamp(timestamp);
-    if (!isNonnegativeInteger(epoch) || !isNonnegativeInteger(usercount)) {
-      throw new Error(`Invalid legacy row ${index + 1}: expected a timestamp and non-negative integer usercount.`);
+    if (!isNonnegativeInteger(epoch) || !isNullableCount(usercount) || !isNullableCount(uniquecount)) {
+      throw new Error(`Invalid legacy row ${index + 1}: expected a timestamp and nullable non-negative integer counts.`);
     }
-    return [epoch, usercount];
+    return uniquecount === null ? [epoch, usercount] : [epoch, usercount, uniquecount];
   });
   return dedupeLast(normalized);
 }
@@ -86,10 +102,10 @@ function normalizeLegacyRows(rows) {
 function normalizeR2Rows(rows) {
   if (!Array.isArray(rows)) throw new Error("R2 input must be an array of tuples.");
   const normalized = rows.map((row, index) => {
-    if (!isStatsTuple(row)) {
-      throw new Error(`Invalid R2 row ${index + 1}: expected a two- or three-value non-negative integer tuple.`);
+    if (!isSourceStatsTuple(row)) {
+      throw new Error(`Invalid R2 row ${index + 1}: expected a two- or three-value tuple with nullable non-negative integer counts.`);
     }
-    return row.length === 3 ? [row[0], row[1], row[2]] : [row[0], row[1]];
+    return row.length === 3 && row[2] !== null ? [row[0], row[1], row[2]] : [row[0], row[1]];
   });
   return dedupeLast(normalized);
 }
@@ -158,8 +174,8 @@ function parseJsonlFile(filePath, fileName = path.basename(filePath)) {
     } catch {
       throw new Error(`Invalid JSONL in ${filePath} at line ${index + 1}: malformed JSON.`);
     }
-    if (!isStatsTuple(row)) {
-      throw new Error(`Invalid JSONL in ${filePath} at line ${index + 1}: expected a two- or three-value non-negative integer tuple.`);
+    if (!isSourceStatsTuple(row)) {
+      throw new Error(`Invalid JSONL in ${filePath} at line ${index + 1}: expected a two- or three-value tuple with nullable non-negative integer counts.`);
     }
     if (monthNameForTimestamp(row[0]) !== match[1]) {
       throw new Error(`Invalid JSONL in ${filePath} at line ${index + 1}: timestamp does not match filename month.`);
@@ -208,12 +224,20 @@ function isNonnegativeInteger(value) {
   return Number.isSafeInteger(value) && value >= 0;
 }
 
-function isStatsTuple(value) {
+function isNullableCount(value) {
+  return value === null || isNonnegativeInteger(value);
+}
+
+function firstDefined(...values) {
+  return values.find((value) => value !== undefined) ?? null;
+}
+
+function isSourceStatsTuple(value) {
   return Array.isArray(value)
     && (value.length === 2 || value.length === 3)
     && isNonnegativeInteger(value[0])
-    && isNonnegativeInteger(value[1])
-    && (value.length === 2 || isNonnegativeInteger(value[2]));
+    && isNullableCount(value[1])
+    && (value.length === 2 || isNullableCount(value[2]));
 }
 
 function previousMonthName(monthKey) {
@@ -271,7 +295,7 @@ async function readJson(source) {
   const response = await fetch(source, {
     headers: {
       accept: "application/json",
-      "user-agent": "mushmom-stats-archive-generator/2.0",
+      "user-agent": "mushmom-stats-archive-generator/3.0",
     },
   });
   if (!response.ok) throw new Error(`Legacy stats source returned ${response.status}.`);

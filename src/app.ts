@@ -233,10 +233,11 @@ function normalizePayload(payload: StatsPayload): StatsPoint[] {
       };
     })
     .map((row): { date: Date | null; characterCount: number; playerCount: number | null } => {
+      const characterCount = row.usercount == null ? Number.NaN : Number(row.usercount);
       const playerCount = row.uniquecount == null ? Number.NaN : Number(row.uniquecount);
       return {
         date: parseTimestamp(row.timestamp),
-        characterCount: Number(row.usercount),
+        characterCount,
         playerCount: Number.isFinite(playerCount) && playerCount >= 0 ? playerCount : null,
       };
     })
