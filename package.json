@@ -11,6 +11,7 @@
     "build": "vite build",
     "check": "npm run test && npm run typecheck && npm run build",
     "generate:stats-archive": "node scripts/generate_stats_archive.cjs",
+    "migrate:stats-json": "node scripts/migrate_2026_07_stats_json.cjs",
     "preview": "vite preview",
     "deploy": "wrangler pages deploy dist --project-name mushmom"
   },

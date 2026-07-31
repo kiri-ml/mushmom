@@ -146,6 +146,18 @@ The archive builder reads monthly JSON objects with `--json-dir`; it does not
 accept JSONL input. Archive source ownership switches from the legacy Google
 Storage dataset to R2 at `2026-07-01T00:00:00Z`.
 
+The one-time July migration script validates the existing JSONL object and
+generates the same compact JSON formatting as the stats Worker. It performs a
+dry run by default; pass `--apply` to upload the new object. The source JSONL
+object is never deleted. A matching destination is a successful no-op; use
+`--apply --force` to overwrite a destination containing older migration data.
+
+```sh
+npm run migrate:stats-json
+npm run migrate:stats-json -- --apply
+npm run migrate:stats-json -- --apply --force
+```
+
 Create the R2 bucket:
 
 ```sh
