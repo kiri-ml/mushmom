@@ -25,15 +25,15 @@ export type Env = {
   ADMIN_TOKEN?: string;
 };
 
-type SyncOptions = {
+type AppendOptions = {
   now?: Date;
   fetcher?: typeof fetch;
   retryDelayMs?: number;
 };
 
-type SyncResult = {
+type AppendResult = {
   fetchedAt: string;
-  bucket: number;
+  timestamp: number;
   data: StatsRow;
 };
 
@@ -250,45 +250,38 @@ async function readCurrentUsercounts(url: string, fetcher: typeof fetch, retryDe
   throw latestError;
 }
 
-export async function syncStats(env: Env, options: SyncOptions = {}): Promise<SyncResult> {
+export async function appendStats(env: Env, options: AppendOptions = {}): Promise<AppendResult> {
   if (!env.CURRENT_USERS_URL) {
     throw new SyncError("CURRENT_USERS_URL is not configured.", 500);
   }
 
   const now = options.now ?? new Date();
   const fetchedAt = now.toISOString();
-  const interval = readInterval(env);
-  const bucket = bucketTimestamp(Math.floor(now.getTime() / 1000), interval);
+  const timestamp = Math.floor(now.getTime() / 1000);
   const fetcher = options.fetcher ?? fetch;
   const retryDelayMs = options.retryDelayMs ?? POLL_RETRY_DELAY_MS;
 
   const { usercount, uniquecount } = await readCurrentUsercounts(env.CURRENT_USERS_URL, fetcher, retryDelayMs);
   const data = hasCharacterCountOnly({ usercount, uniquecount })
-    ? createStatsRow(bucket, usercount)
-    : createStatsRow(bucket, usercount, uniquecount);
+    ? createStatsRow(timestamp, usercount)
+    : createStatsRow(timestamp, usercount, uniquecount);
 
-  const key = monthlyKey(bucket);
-  let existing: R2ObjectBodyLike | null;
+  const key = monthlyKey(timestamp);
+  let existingText: string;
   try {
-    existing = await env.STATS_BUCKET.get(key);
+    const existing = await env.STATS_BUCKET.get(key);
+    existingText = existing ? await existing.text() : "";
   } catch (error) {
     const detail = error instanceof Error ? error.message : "unknown R2 error";
     throw new SyncError(`Failed to read ${key}: ${detail}`, 500);
   }
 
-  let rows: StatsRow[];
-  try {
-    rows = parseJsonl(existing ? await existing.text() : "");
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : "invalid JSONL";
-    throw new SyncError(`Failed to parse existing ${key}: ${detail}`, 500);
-  }
-
-  const updatedRows = upsertRow(rows, data);
-  const result: SyncResult = { fetchedAt, bucket, data };
+  const separator = existingText !== "" && !existingText.endsWith("\n") ? "\n" : "";
+  const updatedText = `${existingText}${separator}${JSON.stringify(data)}\n`;
+  const result: AppendResult = { fetchedAt, timestamp, data };
 
   try {
-    await env.STATS_BUCKET.put(key, serializeJsonl(updatedRows), {
+    await env.STATS_BUCKET.put(key, updatedText, {
       httpMetadata: { contentType: "application/x-ndjson; charset=utf-8" },
     });
   } catch (error) {
@@ -367,32 +360,29 @@ function requireAdmin(env: Env, request: Request): Response | null {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    if (url.pathname !== "/admin/sync" && url.pathname !== "/admin/point") return json({ error: "Not found." }, 404);
+    if (url.pathname !== "/admin/point") return json({ error: "Not found." }, 404);
     if (request.method !== "POST") return json({ error: "Method not allowed." }, 405, { allow: "POST" });
 
     const authError = requireAdmin(env, request);
     if (authError) return authError;
 
     try {
-      if (url.pathname === "/admin/point") {
-        const payload = validateUpdatePointPayload(await readJsonRequest(request));
-        return json(await updateStatsPoint(env, payload.timestamp, payload.usercount, payload.uniquecount));
-      }
-      return json(await syncStats(env));
+      const payload = validateUpdatePointPayload(await readJsonRequest(request));
+      return json(await updateStatsPoint(env, payload.timestamp, payload.usercount, payload.uniquecount));
     } catch (error) {
       if (error instanceof SyncError) return json({ error: error.message }, error.status);
-      return json({ error: error instanceof Error ? error.message : "Stats sync failed." }, 500);
+      return json({ error: error instanceof Error ? error.message : "Stats point update failed." }, 500);
     }
   },
 
   async scheduled(_controller: unknown, env: Env): Promise<void> {
     try {
-      await syncStats(env);
+      await appendStats(env);
     } catch (error) {
       const detail = error instanceof Error
         ? `${error.message}\n${error.stack ?? ""}`
         : String(error);
-      console.error(`Scheduled stats sync failed: ${detail}`);
+      console.error(`Scheduled stats append failed: ${detail}`);
       throw error;
     }
   },

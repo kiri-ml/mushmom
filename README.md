@@ -135,9 +135,10 @@ In these wire-format rows, `usercount` stores online characters and
 `uniquecount` stores estimated players identified by IP. These field names and
 their tuple ordering are preserved for API and archive compatibility.
 
-The stats Worker upserts each scheduled observation into the current monthly
-object. If the object does not exist, the Worker creates it from that
-observation.
+The stats Worker appends each scheduled observation to the current monthly
+object without parsing or deduplicating existing rows. If the object does not
+exist, the Worker creates it from that observation. Scheduled rows use the
+actual observation time in whole UTC epoch seconds without interval bucketing.
 
 Create the R2 bucket and configure the admin secret:
 
@@ -146,12 +147,14 @@ npx wrangler r2 bucket create mushmom-stats
 npx wrangler secret put ADMIN_TOKEN --config workers/stats/wrangler.toml
 ```
 
-For local manual sync testing, put `ADMIN_TOKEN="your-token"` in
+For local manual point testing, put `ADMIN_TOKEN="your-token"` in
 `workers/stats/.dev.vars`, then run:
 
 ```sh
 npx wrangler dev --config workers/stats/wrangler.toml
-curl -X POST -H "Authorization: Bearer your-token" http://127.0.0.1:8787/admin/sync
+curl -X POST -H "Authorization: Bearer your-token" -H "Content-Type: application/json" \
+  --data '{"timestamp":1783036979,"usercount":42,"uniquecount":21}' \
+  http://127.0.0.1:8787/admin/point
 ```
 
 Deploy the Worker (the five-minute cron is defined in its Wrangler config):
