@@ -11,9 +11,8 @@ The app fetches:
 
 It visualizes the time series with Apache ECharts.
 
-The current deterministic archive format is documented in
-[`docs/archive-schema-v3.md`](docs/archive-schema-v3.md). The loader also
-supports the previous [`schema v2`](docs/archive-schema-v2.md) format.
+The deterministic archive format is documented in
+[`docs/archive-schema-v3.md`](docs/archive-schema-v3.md).
 
 ## Data Shape
 

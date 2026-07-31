@@ -1,8 +1,7 @@
 # Stats Archive Schema v3
 
-Schema v3 adds delta-encoded timestamps and counts to deterministic archive
-chunks for the `maplelegends-online-users` dataset. Readers SHOULD continue to
-support schema v2 during migration.
+Schema v3 defines delta-encoded timestamps and counts for deterministic archive
+chunks in the `maplelegends-online-users` dataset.
 
 ## Manifest
 
@@ -29,10 +28,46 @@ support schema v2 during migration.
 }
 ```
 
-The manifest rules, archive horizon, partitioning, and chunk ordering are the
-same as schema v2. `schemaVersion` MUST equal `3`, and `format.rowShape` MUST
-equal the shape shown above. Manifest timestamp bounds remain absolute Unix
-timestamps in seconds.
+### Manifest fields
+
+- `schemaVersion` MUST equal `3`.
+- `dataset` MUST equal `maplelegends-online-users`.
+- `archiveThroughPeriod` is the latest completed UTC month represented by the
+  archive, including a month with no observations. It MUST use `YYYY-MM`.
+- `format.rowShape` MUST equal
+  `["timestampDeltaSeconds", "usercountDelta"]` or
+  `["timestampDeltaSeconds", "usercountDelta", "uniquecountDelta?"]`.
+- The compatibility name `usercount` stores the number of online characters.
+  The compatibility name `uniquecount` stores the estimated number of players,
+  identified by IP. Their names and tuple positions MUST remain unchanged.
+- `format.timestampUnit` MUST equal `seconds`.
+- `format.order` MUST equal `ascending`.
+- `chunks` MUST be ordered newest-first and MUST NOT overlap.
+
+Each chunk entry contains:
+
+- `period`: `YYYY-MM` for a monthly chunk or `YYYY` for an annual chunk.
+- `granularity`: `month` or `year`, matching `period`.
+- `file`: a content-hashed filename relative to the manifest.
+- `minTimestamp`: the smallest decoded sample timestamp in the chunk.
+- `maxTimestamp`: the largest decoded sample timestamp in the chunk.
+- `rowCount`: the number of rows in the chunk.
+
+Manifest timestamp bounds remain absolute Unix timestamps in seconds. An empty
+archived month advances `archiveThroughPeriod` but does not produce an empty
+chunk.
+
+### Partitioning
+
+Monthly chunks cover observed months in the same calendar year as
+`archiveThroughPeriod`, from January through `archiveThroughPeriod`. If
+`archiveThroughPeriod` is January, observed months from the full previous
+calendar year also remain monthly so the latest previous-year December can be
+loaded without fetching a full annual chunk.
+
+All earlier observations are grouped into non-overlapping complete annual
+chunks. Annual chunks MUST NOT represent partial calendar years. Periods without
+observations do not produce empty chunk files.
 
 ## Chunk
 
