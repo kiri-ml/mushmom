@@ -125,8 +125,8 @@ Monthly R2 stats are available from `GET /api/stats/YYYY-MM`. The month must use
 the zero-padded UTC format, for example `/api/stats/2026-07`. Successful
 responses are JSON arrays of legacy `[epochSeconds, usercount]` or new
 `[epochSeconds, usercount, uniquecount]` rows in ascending order. Live monthly
-data is stored as compact row-based JSON arrays at `stats/json/YYYY-MM.json`,
-including the migrated `2026-07.json`; a month with no object returns `[]`.
+data is stored as compact row-based JSON arrays at `stats/json/YYYY-MM.json`;
+a month with no object returns `[]`.
 
 If the observer reports a zero character count with a positive unique count,
 the stored row is `[epochSeconds, null, uniquecount]`; null marks the character
@@ -142,10 +142,9 @@ deduplicating existing rows. Monthly objects use fully compact JSON such as
 replacing the final bracket. Scheduled rows use the actual observation time in
 whole UTC epoch seconds without interval bucketing.
 
-The archive builder reads migrated monthly JSON objects with `--json-dir`; it
-does not accept JSONL input. Archive source ownership switches from the legacy
-Google Storage dataset to R2 at `2026-07-01T00:00:00Z`, including a migrated
-`2026-07.json` in the R2 input directory.
+The archive builder reads monthly JSON objects with `--json-dir`; it does not
+accept JSONL input. Archive source ownership switches from the legacy Google
+Storage dataset to R2 at `2026-07-01T00:00:00Z`.
 
 Create the R2 bucket:
 
