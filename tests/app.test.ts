@@ -185,7 +185,7 @@ type ArchiveManifest = StatsManifest;
 type ArchiveRow = [number, number | null] | [number, number | null, number | null];
 type StatsArchiveGenerator = {
   generateArchive: (payload: unknown, outputDir: string, r2Rows?: ArchiveRow[]) => { manifest: ArchiveManifest };
-  readJsonlDirectory: (jsonlDir: string) => ArchiveRow[];
+  readJsonDirectory: (jsonDir: string) => ArchiveRow[];
 };
 
 function makeChunk(period: string, minTimestamp: number, maxTimestamp = minTimestamp): StatsManifestChunk {
@@ -339,14 +339,15 @@ describe("vite migration", () => {
 });
 
 describe("stats archive generator", () => {
-  it("generates deterministic legacy-only archives when R2 JSONL is absent", () => {
+  it("generates deterministic legacy-only archives when R2 JSON is absent", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mushmom-legacy-only-"));
-    const jsonlDir = path.join(tempDir, "jsonl");
+    const jsonDir = path.join(tempDir, "json");
     const outputDir = path.join(tempDir, "out");
-    fs.mkdirSync(jsonlDir);
+    fs.mkdirSync(jsonDir);
+    fs.writeFileSync(path.join(jsonDir, "2026-07.jsonl"), "[1782864000,999]\n");
     const generator = require(path.join(repoRoot, "scripts/generate_stats_archive.cjs")) as StatsArchiveGenerator;
 
-    expect(generator.readJsonlDirectory(jsonlDir)).toEqual([]);
+    expect(generator.readJsonDirectory(jsonDir)).toEqual([]);
     const { manifest } = generator.generateArchive({ data: [
       { timestamp: "2026-07-01T00:00:00Z", usercount: 99 },
       { timestamp: "2026-06-30T23:45:04Z", usercount: 12 },
@@ -354,6 +355,31 @@ describe("stats archive generator", () => {
 
     expect(manifest.archiveThroughPeriod).toBe("2026-06");
     expect(manifest.chunks.map((chunk) => chunk.period)).toEqual(["2026-06"]);
+  });
+
+  it("uses migrated July JSON as the first R2-owned month", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mushmom-json-cutover-"));
+    const jsonDir = path.join(tempDir, "json");
+    const outputDir = path.join(tempDir, "out");
+    fs.mkdirSync(jsonDir);
+    fs.writeFileSync(path.join(jsonDir, "2026-07.json"), "[[1782864000,20]]");
+    fs.writeFileSync(path.join(jsonDir, "2026-08.json"), "[[1785542400,30]]");
+    const generator = require(path.join(repoRoot, "scripts/generate_stats_archive.cjs")) as StatsArchiveGenerator;
+
+    const rows = generator.readJsonDirectory(jsonDir);
+    const { manifest } = generator.generateArchive({ data: [
+      { timestamp: "2026-06-30T23:45:04Z", usercount: 10 },
+      { timestamp: "2026-07-01T00:00:00Z", usercount: 999 },
+    ] }, outputDir, rows);
+
+    expect(manifest.archiveThroughPeriod).toBe("2026-07");
+    const july = manifest.chunks.find((chunk) => chunk.period === "2026-07")!;
+    expect(JSON.parse(fs.readFileSync(path.join(outputDir, july.file), "utf8"))).toEqual({
+      schemaVersion: 3,
+      period: "2026-07",
+      timestampBase: 1782864000,
+      data: [[0, 20]],
+    });
   });
 
   it("enforces cutover ownership, excludes the open month, and resolves duplicates last", () => {
@@ -457,15 +483,33 @@ describe("stats archive generator", () => {
     ]);
   });
 
-  it("validates monthly filenames, month agreement, and ascending rows", () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mushmom-invalid-jsonl-"));
-    const jsonlPath = path.join(tempDir, "2026-07.jsonl");
-    fs.writeFileSync(jsonlPath, "[1783037100,1]\n[1783036800,2]\n");
+  it("reads compact monthly JSON and validates filenames, month agreement, and ascending rows", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mushmom-invalid-json-"));
+    const jsonPath = path.join(tempDir, "2026-07.json");
+    fs.writeFileSync(jsonPath, "[[1782864000,1],[1782864300,2,1]]");
     const generator = require(path.join(repoRoot, "scripts/generate_stats_archive.cjs")) as StatsArchiveGenerator;
-    expect(() => generator.readJsonlDirectory(tempDir)).toThrow("timestamps must be ascending");
+    expect(generator.readJsonDirectory(tempDir)).toEqual([
+      [1782864000, 1],
+      [1782864300, 2, 1],
+    ]);
 
-    fs.writeFileSync(jsonlPath, "[1785542400,1]\n");
-    expect(() => generator.readJsonlDirectory(tempDir)).toThrow("timestamp does not match filename month");
+    fs.writeFileSync(jsonPath, "[[1783037100,1],[1783036800,2]]");
+    expect(() => generator.readJsonDirectory(tempDir)).toThrow("timestamps must be ascending");
+
+    fs.writeFileSync(jsonPath, "[[1785542400,1]]");
+    expect(() => generator.readJsonDirectory(tempDir)).toThrow("timestamp does not match filename month");
+  });
+
+  it.each([
+    ["2026-07.json", "not-json", "malformed JSON"],
+    ["2026-07.json", "{}", "expected an array"],
+    ["2026-07.json", "[[1782864000,-1]]", "expected a two- or three-value tuple"],
+    ["2026-13.json", "[]", "Invalid R2 JSON filename"],
+  ])("rejects invalid monthly JSON input", (fileName, contents, message) => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mushmom-invalid-json-"));
+    fs.writeFileSync(path.join(tempDir, fileName), contents);
+    const generator = require(path.join(repoRoot, "scripts/generate_stats_archive.cjs")) as StatsArchiveGenerator;
+    expect(() => generator.readJsonDirectory(tempDir)).toThrow(message);
   });
 });
 

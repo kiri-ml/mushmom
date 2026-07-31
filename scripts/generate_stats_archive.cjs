@@ -13,9 +13,9 @@ const DEFAULT_BUNDLED_MANIFEST_PATH = "src/assets/stats/manifests.json";
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const outputDir = path.resolve(process.cwd(), options.output || DEFAULT_OUTPUT_DIR);
-  const jsonlDir = options.jsonlDir ? path.resolve(process.cwd(), options.jsonlDir) : null;
+  const jsonDir = options.jsonDir ? path.resolve(process.cwd(), options.jsonDir) : null;
   const legacyPayloadPromise = readJson(LEGACY_SOURCE);
-  const r2Rows = jsonlDir ? readJsonlDirectory(jsonlDir) : [];
+  const r2Rows = jsonDir ? readJsonDirectory(jsonDir) : [];
   const legacyPayload = await legacyPayloadPromise;
   const { chunks } = generateArchive(legacyPayload, outputDir, r2Rows);
   console.log(`Generated ${chunks.length} stats archive chunks in ${path.relative(process.cwd(), outputDir)}`);
@@ -151,37 +151,38 @@ function isMonthlyArchivePeriod(period, horizon) {
   return horizon.month === 1 && parsed.year === horizon.year - 1;
 }
 
-function readJsonlDirectory(jsonlDir) {
-  if (!fs.existsSync(jsonlDir) || !fs.statSync(jsonlDir).isDirectory()) {
-    throw new Error(`JSONL directory not found: ${jsonlDir}`);
+function readJsonDirectory(jsonDir) {
+  if (!fs.existsSync(jsonDir) || !fs.statSync(jsonDir).isDirectory()) {
+    throw new Error(`JSON directory not found: ${jsonDir}`);
   }
-  const files = fs.readdirSync(jsonlDir).filter((file) => file.endsWith(".jsonl")).sort();
+  const files = fs.readdirSync(jsonDir).filter((file) => file.endsWith(".json")).sort();
   if (files.length === 0) return [];
-  return files.flatMap((file) => parseJsonlFile(path.join(jsonlDir, file), file));
+  return files.flatMap((file) => parseJsonFile(path.join(jsonDir, file), file));
 }
 
-function parseJsonlFile(filePath, fileName = path.basename(filePath)) {
-  const match = /^(\d{4}-\d{2})\.jsonl$/.exec(fileName);
-  if (!match || !parseMonthKey(match[1])) throw new Error(`Invalid R2 JSONL filename: ${fileName}`);
+function parseJsonFile(filePath, fileName = path.basename(filePath)) {
+  const match = /^(\d{4}-\d{2})\.json$/.exec(fileName);
+  if (!match || !parseMonthKey(match[1])) throw new Error(`Invalid R2 JSON filename: ${fileName}`);
   const text = fs.readFileSync(filePath, "utf8");
-  const lines = text.split(/\r?\n/);
-  if (lines.at(-1) === "") lines.pop();
+  let rows;
+  try {
+    rows = JSON.parse(text);
+  } catch {
+    throw new Error(`Invalid JSON in ${filePath}: malformed JSON.`);
+  }
+  if (!Array.isArray(rows)) {
+    throw new Error(`Invalid JSON in ${filePath}: expected an array of stats tuples.`);
+  }
   let previous = -1;
-  return lines.map((line, index) => {
-    let row;
-    try {
-      row = JSON.parse(line);
-    } catch {
-      throw new Error(`Invalid JSONL in ${filePath} at line ${index + 1}: malformed JSON.`);
-    }
+  return rows.map((row, index) => {
     if (!isSourceStatsTuple(row)) {
-      throw new Error(`Invalid JSONL in ${filePath} at line ${index + 1}: expected a two- or three-value tuple with nullable non-negative integer counts.`);
+      throw new Error(`Invalid JSON in ${filePath} at row ${index + 1}: expected a two- or three-value tuple with nullable non-negative integer counts.`);
     }
     if (monthNameForTimestamp(row[0]) !== match[1]) {
-      throw new Error(`Invalid JSONL in ${filePath} at line ${index + 1}: timestamp does not match filename month.`);
+      throw new Error(`Invalid JSON in ${filePath} at row ${index + 1}: timestamp does not match filename month.`);
     }
     if (row[0] < previous) {
-      throw new Error(`Invalid JSONL in ${filePath} at line ${index + 1}: timestamps must be ascending.`);
+      throw new Error(`Invalid JSON in ${filePath} at row ${index + 1}: timestamps must be ascending.`);
     }
     previous = row[0];
     return row;
@@ -270,10 +271,10 @@ function parseArgs(args) {
   const options = {};
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
-    if (arg === "--output" || arg === "--jsonl-dir") {
+    if (arg === "--output" || arg === "--json-dir") {
       const value = args[++index];
       if (!value) throw new Error(`Missing value for ${arg}.`);
-      options[arg === "--output" ? "output" : "jsonlDir"] = value;
+      options[arg === "--output" ? "output" : "jsonDir"] = value;
     } else if (arg === "--help" || arg === "-h") {
       printHelp();
       process.exit(0);
@@ -285,10 +286,10 @@ function parseArgs(args) {
 }
 
 function printHelp() {
-  console.log(`Usage: node scripts/generate_stats_archive.cjs [--jsonl-dir <directory>] [--output <directory>]
+  console.log(`Usage: node scripts/generate_stats_archive.cjs [--json-dir <directory>] [--output <directory>]
 
 Always reads legacy history from ${LEGACY_SOURCE}.
-If R2 JSONL is absent, archives through the month before the fixed cutover.`);
+If R2 JSON is absent, archives through the month before the fixed cutover.`);
 }
 
 async function readJson(source) {
@@ -315,6 +316,6 @@ module.exports = {
   buildChunks,
   generateArchive,
   normalizeLegacyRows,
-  parseJsonlFile,
-  readJsonlDirectory,
+  parseJsonFile,
+  readJsonDirectory,
 };

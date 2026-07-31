@@ -143,6 +143,11 @@ deduplicating existing rows. Monthly objects use fully compact JSON such as
 replacing the final bracket. Scheduled rows use the actual observation time in
 whole UTC epoch seconds without interval bucketing.
 
+The archive builder reads migrated monthly JSON objects with `--json-dir`; it
+does not accept JSONL input. Archive source ownership switches from the legacy
+Google Storage dataset to R2 at `2026-07-01T00:00:00Z`, including a migrated
+`2026-07.json` in the R2 input directory.
+
 Create the R2 bucket:
 
 ```sh

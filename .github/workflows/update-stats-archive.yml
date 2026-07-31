@@ -36,10 +36,10 @@ jobs:
 
       - name: Download R2 stats
         run: |
-          mkdir -p .r2/stats/jsonl
+          mkdir -p .r2/stats/json
           aws s3 sync \
-            s3://mushmom-stats/stats/jsonl \
-            .r2/stats/jsonl \
+            s3://mushmom-stats/stats/json \
+            .r2/stats/json \
             --endpoint-url "https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com"
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -48,7 +48,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
       - name: Generate stats archive
-        run: npm run generate:stats-archive -- --jsonl-dir .r2/stats/jsonl
+        run: npm run generate:stats-archive -- --json-dir .r2/stats/json
 
       - name: Detect archive changes
         id: archive
