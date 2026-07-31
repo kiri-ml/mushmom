@@ -1,6 +1,5 @@
 const R2_JSONL_PREFIX = "stats/jsonl/";
-const OPEN_MONTH_CACHE_CONTROL =
-  "public, max-age=60, s-maxage=300, stale-while-revalidate=60, stale-if-error=3600";
+const OPEN_MONTH_CACHE_CONTROL = "public, max-age=60, s-maxage=300";
 const CLOSED_MONTH_CACHE_CONTROL =
   "public, max-age=31536000, s-maxage=31536000, immutable";
 const MONTH_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
