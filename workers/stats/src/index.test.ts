@@ -71,9 +71,9 @@ describe("stats rows", () => {
 
   it("creates and appends compact row-based JSON without parsing", () => {
     const first = appendRowJson("", [ROW_JSON_CUTOVER_EPOCH, 12, 7]);
-    expect(first).toBe("[[1785542400,12,7]\n]");
+    expect(first).toBe("[[1785542400,12,7]]");
     expect(appendRowJson(first, [ROW_JSON_CUTOVER_EPOCH + 60, null, 8])).toBe(
-      "[[1785542400,12,7]\n,[1785542460,null,8]\n]",
+      "[[1785542400,12,7],[1785542460,null,8]]",
     );
     expect(JSON.parse(appendRowJson(first, [ROW_JSON_CUTOVER_EPOCH + 60, 14]))).toEqual([
       [ROW_JSON_CUTOVER_EPOCH, 12, 7],
@@ -388,13 +388,13 @@ describe("scheduled stats append", () => {
     });
 
     expect(bucket.gets).toEqual(["stats/json/2026-08.json"]);
-    expect(bucket.objects.get("stats/json/2026-08.json")).toBe("[[1785542400,5,3]\n]");
+    expect(bucket.objects.get("stats/json/2026-08.json")).toBe("[[1785542400,5,3]]");
     expect(bucket.puts[0]?.contentType).toBe("application/json; charset=utf-8");
   });
 
   it("appends row-based JSON by replacing only its final bracket", async () => {
     const bucket = new FakeBucket();
-    bucket.objects.set("stats/json/2026-08.json", "[[1785542400,5,3]\n]");
+    bucket.objects.set("stats/json/2026-08.json", "[[1785542400,5,3]]");
 
     await appendStats(createEnv(bucket), {
       now: new Date("2026-08-01T00:01:00.000Z"),
@@ -403,7 +403,7 @@ describe("scheduled stats append", () => {
     });
 
     const stored = bucket.objects.get("stats/json/2026-08.json");
-    expect(stored).toBe("[[1785542400,5,3]\n,[1785542460,7,4]\n]");
+    expect(stored).toBe("[[1785542400,5,3],[1785542460,7,4]]");
     expect(JSON.parse(stored ?? "")).toEqual([
       [1785542400, 5, 3],
       [1785542460, 7, 4],

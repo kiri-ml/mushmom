@@ -109,7 +109,7 @@ describe("monthly stats function", () => {
     const mod = await loadMonthlyModule();
     const cache = stubCache();
     const bucket = makeR2Bucket({
-      "stats/json/2026-08.json": "[[1785542400,1200]\n,[1785542460,1250,625]\n]",
+      "stats/json/2026-08.json": "[[1785542400,1200],[1785542460,1250,625]]",
     });
     const get = vi.spyOn(bucket, "get");
 

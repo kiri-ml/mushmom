@@ -60,11 +60,11 @@ export function isStatsRow(value: unknown): value is StatsRow {
 
 export function appendRowJson(existingText: string, row: StatsRow): string {
   if (!isStatsRow(row)) throw new Error("Cannot append an invalid stats row.");
-  if (existingText === "") return `[${JSON.stringify(row)}\n]`;
+  if (existingText === "") return `[${JSON.stringify(row)}]`;
   if (!existingText.endsWith("]")) {
     throw new Error("Existing row-based JSON must end with a closing bracket.");
   }
-  return existingText.replace(/\]$/, `,${JSON.stringify(row)}\n]`);
+  return existingText.replace(/\]$/, `,${JSON.stringify(row)}]`);
 }
 
 function isNonnegativeInteger(value: unknown): value is number {

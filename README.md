@@ -138,9 +138,9 @@ In these wire-format rows, `usercount` stores online characters and
 their tuple ordering are preserved for API and archive compatibility.
 
 The stats Worker appends each scheduled observation without parsing or
-deduplicating existing rows. New JSON objects use `[[timestamp,count,...]\n]`;
-later rows are inserted by replacing the final bracket with
-`,[timestamp,count,...]\n]`. Scheduled rows use the actual observation time in
+deduplicating existing rows. Monthly objects use fully compact JSON such as
+`[[timestamp,count,...],[timestamp,count,...]]`; later rows are inserted by
+replacing the final bracket. Scheduled rows use the actual observation time in
 whole UTC epoch seconds without interval bucketing.
 
 Create the R2 bucket:
