@@ -389,7 +389,10 @@ export default {
     try {
       await syncStats(env);
     } catch (error) {
-      console.error("Scheduled stats sync failed.", error);
+      const detail = error instanceof Error
+        ? `${error.message}\n${error.stack ?? ""}`
+        : String(error);
+      console.error(`Scheduled stats sync failed: ${detail}`);
       throw error;
     }
   },

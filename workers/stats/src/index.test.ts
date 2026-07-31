@@ -403,6 +403,24 @@ describe("stats sync validation", () => {
   });
 });
 
+describe("scheduled stats sync", () => {
+  it("logs the underlying error message and stack", async () => {
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    await expect(worker.scheduled(undefined, {
+      ...createEnv(new FakeBucket()),
+      CURRENT_USERS_URL: "",
+    })).rejects.toThrow("CURRENT_USERS_URL is not configured");
+
+    expect(errorLog).toHaveBeenCalledOnce();
+    expect(errorLog.mock.calls[0]?.[0]).toContain(
+      "Scheduled stats sync failed: CURRENT_USERS_URL is not configured.",
+    );
+    expect(errorLog.mock.calls[0]?.[0]).toContain("at syncStats");
+    errorLog.mockRestore();
+  });
+});
+
 describe("manual stats point updates", () => {
   it("updates the monthly object row for the bucket containing the timestamp", async () => {
     const bucket = new FakeBucket();
