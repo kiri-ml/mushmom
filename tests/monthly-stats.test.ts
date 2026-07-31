@@ -6,7 +6,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.join(__dirname, "..");
 
 type R2BucketStub = {
-  get: (key: string) => Promise<{ text: () => Promise<string> } | null>;
+  get: (key: string) => Promise<{
+    body: ReadableStream<Uint8Array>;
+    text: () => Promise<string>;
+  } | null>;
 };
 
 type MonthlyContext = {
@@ -34,7 +37,10 @@ function makeR2Bucket(objects: Record<string, string> = {}): R2BucketStub {
   return {
     async get(key) {
       const value = objects[key];
-      return value === undefined ? null : { async text() { return value; } };
+      return value === undefined ? null : {
+        body: new Response(value).body as ReadableStream<Uint8Array>,
+        async text() { return value; },
+      };
     },
   };
 }
@@ -99,6 +105,25 @@ describe("monthly stats function", () => {
     expect(cache.put).toHaveBeenCalledOnce();
   });
 
+  it("reads row-based JSON objects beginning with August 2026", async () => {
+    const mod = await loadMonthlyModule();
+    const cache = stubCache();
+    const bucket = makeR2Bucket({
+      "stats/json/2026-08.json": "[[1785542400,1200]\n,[1785542460,1250,625]\n]",
+    });
+    const get = vi.spyOn(bucket, "get");
+
+    const response = await mod.onRequestGet(makeContext("2026-08", bucket));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual([
+      [1785542400, 1200],
+      [1785542460, 1250, 625],
+    ]);
+    expect(get).toHaveBeenCalledWith("stats/json/2026-08.json");
+    expect(cache.put).toHaveBeenCalledOnce();
+  });
+
   it("returns an empty successful response for a future month", async () => {
     const mod = await loadMonthlyModule();
     stubCache();
@@ -138,14 +163,14 @@ describe("monthly stats function", () => {
     expect(cache.put).not.toHaveBeenCalled();
   });
 
-  it("returns an uncached 502 when R2 fails", async () => {
+  it.each(["2026-07", "2026-08"])("returns an uncached 502 when R2 fails for %s", async (month) => {
     const mod = await loadMonthlyModule();
     stubCache();
     const bucket: R2BucketStub = {
       async get() { throw new Error("R2 unavailable"); },
     };
 
-    const response = await mod.onRequestGet(makeContext("2026-07", bucket));
+    const response = await mod.onRequestGet(makeContext(month, bucket));
 
     expect(response.status).toBe(502);
     expect(response.headers.get("cache-control")).toBe("no-store");
@@ -177,5 +202,20 @@ describe("monthly stats function", () => {
       error: "STATS_BUCKET is not configured.",
       data: [],
     });
+  });
+
+  it("streams post-cutover R2 bytes without parsing or rewriting them", async () => {
+    const mod = await loadMonthlyModule();
+    stubCache();
+    const contents = "{not validated or rewritten}\n";
+
+    const response = await mod.onRequestGet(makeContext(
+      "2026-08",
+      makeR2Bucket({ "stats/json/2026-08.json": contents }),
+    ));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("application/json; charset=utf-8");
+    expect(await response.text()).toBe(contents);
   });
 });

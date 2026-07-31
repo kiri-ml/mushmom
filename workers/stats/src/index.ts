@@ -4,6 +4,7 @@ export type StatsRow = [epochSeconds: number, usercount: number]
 
 const POLL_RETRY_DELAY_MS = 1_000;
 const MAX_POLL_ATTEMPTS = 3;
+export const ROW_JSON_CUTOVER_EPOCH = 1_785_542_400;
 
 type R2ObjectBodyLike = {
   text(): Promise<string>;
@@ -21,8 +22,6 @@ type R2BucketLike = {
 export type Env = {
   STATS_BUCKET: R2BucketLike;
   CURRENT_USERS_URL: string;
-  SAMPLE_INTERVAL_SECONDS: number | string;
-  ADMIN_TOKEN?: string;
 };
 
 type AppendOptions = {
@@ -37,39 +36,16 @@ type AppendResult = {
   data: StatsRow;
 };
 
-type UpdatePointResult = {
-  bucket: number;
-  key: string;
-  data: StatsRow;
-};
-
-class SyncError extends Error {
-  constructor(
-    message: string,
-    readonly status: number,
-  ) {
-    super(message);
-  }
-}
-
-export function bucketTimestamp(epochSeconds: number, intervalSeconds: number): number {
-  if (!Number.isFinite(epochSeconds) || epochSeconds < 0) {
-    throw new Error("Timestamp must be a finite non-negative number.");
-  }
-  if (!Number.isInteger(intervalSeconds) || intervalSeconds <= 0) {
-    throw new Error("Sample interval must be a positive integer.");
+export function monthlyKey(epochSeconds: number): string {
+  if (!Number.isInteger(epochSeconds) || epochSeconds < 0) {
+    throw new Error("Timestamp must be a non-negative integer.");
   }
 
-  return Math.floor(epochSeconds / intervalSeconds) * intervalSeconds;
-}
-
-export function monthlyKey(bucket: number): string {
-  if (!Number.isInteger(bucket) || bucket < 0) {
-    throw new Error("Bucket timestamp must be a non-negative integer.");
-  }
-
-  const iso = new Date(bucket * 1000).toISOString();
-  return `stats/jsonl/${iso.slice(0, 7)}.jsonl`;
+  const iso = new Date(epochSeconds * 1000).toISOString();
+  const month = iso.slice(0, 7);
+  return epochSeconds >= ROW_JSON_CUTOVER_EPOCH
+    ? `stats/json/${month}.json`
+    : `stats/jsonl/${month}.jsonl`;
 }
 
 export function isStatsRow(value: unknown): value is StatsRow {
@@ -82,53 +58,13 @@ export function isStatsRow(value: unknown): value is StatsRow {
     && (value.length === 2 || isNonnegativeInteger(value[2]));
 }
 
-export function parseJsonl(text: string): StatsRow[] {
-  const trimmed = text.trim();
-  if (trimmed === "") return [];
-
-  return trimmed.split(/\r?\n/).map((line, index) => {
-    let value: unknown;
-    try {
-      value = JSON.parse(line) as unknown;
-    } catch {
-      throw new Error(`Invalid stats JSONL at line ${index + 1}: malformed JSON.`);
-    }
-
-    if (!isStatsRow(value)) {
-      throw new Error(`Invalid stats JSONL at line ${index + 1}: expected a compact stats tuple, with null usercount allowed only when uniquecount is positive.`);
-    }
-    return value;
-  });
-}
-
-export function serializeJsonl(rows: StatsRow[]): string {
-  for (const row of rows) {
-    if (!isStatsRow(row)) {
-      throw new Error("Cannot serialize an invalid stats row.");
-    }
+export function appendRowJson(existingText: string, row: StatsRow): string {
+  if (!isStatsRow(row)) throw new Error("Cannot append an invalid stats row.");
+  if (existingText === "") return `[${JSON.stringify(row)}\n]`;
+  if (!existingText.endsWith("]")) {
+    throw new Error("Existing row-based JSON must end with a closing bracket.");
   }
-  return rows.map((row) => JSON.stringify(row)).join("\n") + (rows.length > 0 ? "\n" : "");
-}
-
-export function upsertRow(rows: StatsRow[], next: StatsRow): StatsRow[] {
-  if (!isStatsRow(next)) throw new Error("Cannot upsert an invalid stats row.");
-
-  const byTimestamp = new Map<number, StatsRow>();
-  for (const row of rows) {
-    if (!isStatsRow(row)) throw new Error("Cannot upsert into invalid stats rows.");
-    byTimestamp.set(row[0], row);
-  }
-  byTimestamp.set(next[0], next);
-
-  return [...byTimestamp.values()].sort((left, right) => left[0] - right[0]);
-}
-
-function readInterval(env: Env): number {
-  const interval = Number(env.SAMPLE_INTERVAL_SECONDS);
-  if (!Number.isInteger(interval) || interval <= 0) {
-    throw new SyncError("SAMPLE_INTERVAL_SECONDS must be a positive integer.", 500);
-  }
-  return interval;
+  return existingText.replace(/\]$/, `,${JSON.stringify(row)}\n]`);
 }
 
 function isNonnegativeInteger(value: unknown): value is number {
@@ -161,36 +97,12 @@ function validateUsercounts(payload: unknown): UserCounts {
     : undefined;
 
   if (!isNonnegativeInteger(usercount)) {
-    throw new SyncError("Upstream response usercount must be a finite non-negative integer.", 502);
+    throw new Error("Upstream response usercount must be a finite non-negative integer.");
   }
   if (!isNonnegativeInteger(uniquecount)) {
-    throw new SyncError("Upstream response uniquecount must be a finite non-negative integer.", 502);
+    throw new Error("Upstream response uniquecount must be a finite non-negative integer.");
   }
   return { usercount, uniquecount };
-}
-
-function validateUpdatePointPayload(payload: unknown): { timestamp: number; usercount: number; uniquecount?: number } {
-  const timestamp = payload && typeof payload === "object"
-    ? (payload as { timestamp?: unknown }).timestamp
-    : undefined;
-  const usercount = payload && typeof payload === "object"
-    ? (payload as { usercount?: unknown }).usercount
-    : undefined;
-  const uniquecount = payload && typeof payload === "object"
-    ? (payload as { uniquecount?: unknown }).uniquecount
-    : undefined;
-
-  if (!isNonnegativeInteger(timestamp)) {
-    throw new SyncError("Request timestamp must be a finite non-negative integer UTC epoch second.", 400);
-  }
-  if (!isNonnegativeInteger(usercount)) {
-    throw new SyncError("Request usercount must be a finite non-negative integer.", 400);
-  }
-  if (uniquecount !== undefined && !isNonnegativeInteger(uniquecount)) {
-    throw new SyncError("Request uniquecount must be a finite non-negative integer when provided.", 400);
-  }
-
-  return { timestamp, usercount, uniquecount };
 }
 
 function sleep(ms: number): Promise<void> {
@@ -205,18 +117,18 @@ async function fetchCurrentUsercounts(url: string, fetcher: typeof fetch): Promi
     });
   } catch (error) {
     const detail = error instanceof Error ? error.message : "unknown fetch error";
-    throw new SyncError(`Failed to fetch current users: ${detail}`, 502);
+    throw new Error(`Failed to fetch current users: ${detail}`);
   }
 
   if (!response.ok) {
-    throw new SyncError(`Current-users API returned HTTP ${response.status}.`, 502);
+    throw new Error(`Current-users API returned HTTP ${response.status}.`);
   }
 
   let payload: unknown;
   try {
     payload = await response.json() as unknown;
   } catch {
-    throw new SyncError("Current-users API returned invalid JSON.", 502);
+    throw new Error("Current-users API returned invalid JSON.");
   }
 
   return validateUsercounts(payload);
@@ -245,14 +157,14 @@ async function readCurrentUsercounts(url: string, fetcher: typeof fetch, retryDe
   if (latestCharacterCountOnly) return latestCharacterCountOnly;
   if (latestCounts) return latestCounts;
   if (latestError === undefined) {
-    throw new SyncError("Failed to fetch current users.", 502);
+    throw new Error("Failed to fetch current users.");
   }
   throw latestError;
 }
 
 export async function appendStats(env: Env, options: AppendOptions = {}): Promise<AppendResult> {
   if (!env.CURRENT_USERS_URL) {
-    throw new SyncError("CURRENT_USERS_URL is not configured.", 500);
+    throw new Error("CURRENT_USERS_URL is not configured.");
   }
 
   const now = options.now ?? new Date();
@@ -273,106 +185,44 @@ export async function appendStats(env: Env, options: AppendOptions = {}): Promis
     existingText = existing ? await existing.text() : "";
   } catch (error) {
     const detail = error instanceof Error ? error.message : "unknown R2 error";
-    throw new SyncError(`Failed to read ${key}: ${detail}`, 500);
+    throw new Error(`Failed to read ${key}: ${detail}`);
   }
 
-  const separator = existingText !== "" && !existingText.endsWith("\n") ? "\n" : "";
-  const updatedText = `${existingText}${separator}${JSON.stringify(data)}\n`;
+  const rowJson = timestamp >= ROW_JSON_CUTOVER_EPOCH;
+  const updatedText = rowJson
+    ? appendRowJson(existingText, data)
+    : `${existingText}${existingText !== "" && !existingText.endsWith("\n") ? "\n" : ""}${JSON.stringify(data)}\n`;
   const result: AppendResult = { fetchedAt, timestamp, data };
 
   try {
     await env.STATS_BUCKET.put(key, updatedText, {
-      httpMetadata: { contentType: "application/x-ndjson; charset=utf-8" },
+      httpMetadata: {
+        contentType: rowJson
+          ? "application/json; charset=utf-8"
+          : "application/x-ndjson; charset=utf-8",
+      },
     });
   } catch (error) {
     const detail = error instanceof Error ? error.message : "unknown R2 error";
-    throw new SyncError(`Failed to write stats to R2: ${detail}`, 500);
+    throw new Error(`Failed to write stats to R2: ${detail}`);
   }
 
   return result;
 }
 
-export async function updateStatsPoint(env: Env, timestamp: number, usercount: number, uniquecount?: number): Promise<UpdatePointResult> {
-  const interval = readInterval(env);
-  const bucket = bucketTimestamp(timestamp, interval);
-  const data = createStatsRow(bucket, usercount, uniquecount);
-  if (!isStatsRow(data)) throw new SyncError("Request counts must be finite non-negative integers.", 400);
-
-  const key = monthlyKey(bucket);
-  let existing: R2ObjectBodyLike | null;
-  try {
-    existing = await env.STATS_BUCKET.get(key);
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : "unknown R2 error";
-    throw new SyncError(`Failed to read ${key}: ${detail}`, 500);
-  }
-
-  let rows: StatsRow[];
-  try {
-    rows = parseJsonl(existing ? await existing.text() : "");
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : "invalid JSONL";
-    throw new SyncError(`Failed to parse existing ${key}: ${detail}`, 500);
-  }
-
-  const updatedRows = upsertRow(rows, data);
-  try {
-    await env.STATS_BUCKET.put(key, serializeJsonl(updatedRows), {
-      httpMetadata: { contentType: "application/x-ndjson; charset=utf-8" },
-    });
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : "unknown R2 error";
-    throw new SyncError(`Failed to write stats to R2: ${detail}`, 500);
-  }
-
-  return { bucket, key, data };
-}
-
-function json(body: unknown, status = 200, extraHeaders: HeadersInit = {}): Response {
+function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: {
       "content-type": "application/json; charset=utf-8",
       "cache-control": "no-store",
-      ...extraHeaders,
     },
   });
 }
 
-async function readJsonRequest(request: Request): Promise<unknown> {
-  try {
-    return await request.json() as unknown;
-  } catch {
-    throw new SyncError("Request body must be valid JSON.", 400);
-  }
-}
-
-function requireAdmin(env: Env, request: Request): Response | null {
-  if (!env.ADMIN_TOKEN) {
-    return json({ error: "ADMIN_TOKEN is not configured." }, 500);
-  }
-  if (request.headers.get("authorization") !== `Bearer ${env.ADMIN_TOKEN}`) {
-    return json({ error: "Unauthorized." }, 401, { "www-authenticate": "Bearer" });
-  }
-  return null;
-}
-
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    const url = new URL(request.url);
-    if (url.pathname !== "/admin/point") return json({ error: "Not found." }, 404);
-    if (request.method !== "POST") return json({ error: "Method not allowed." }, 405, { allow: "POST" });
-
-    const authError = requireAdmin(env, request);
-    if (authError) return authError;
-
-    try {
-      const payload = validateUpdatePointPayload(await readJsonRequest(request));
-      return json(await updateStatsPoint(env, payload.timestamp, payload.usercount, payload.uniquecount));
-    } catch (error) {
-      if (error instanceof SyncError) return json({ error: error.message }, error.status);
-      return json({ error: error instanceof Error ? error.message : "Stats point update failed." }, 500);
-    }
+  async fetch(): Promise<Response> {
+    return json({ error: "Not found." }, 404);
   },
 
   async scheduled(_controller: unknown, env: Env): Promise<void> {

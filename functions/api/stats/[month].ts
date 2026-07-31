@@ -1,4 +1,6 @@
 const R2_JSONL_PREFIX = "stats/jsonl/";
+const R2_JSON_PREFIX = "stats/json/";
+const ROW_JSON_CUTOVER_MONTH = "2026-08";
 const OPEN_MONTH_CACHE_CONTROL = "public, max-age=60, s-maxage=300";
 const CLOSED_MONTH_CACHE_CONTROL =
   "public, max-age=31536000, s-maxage=31536000, immutable";
@@ -9,6 +11,7 @@ export type StatsRow = [epochSeconds: number, usercount: number]
   | [epochSeconds: number, usercount: null, uniquecount: number];
 
 type R2ObjectBodyLike = {
+  body: ReadableStream<Uint8Array>;
   text(): Promise<string>;
 };
 
@@ -53,7 +56,9 @@ export async function onRequestGet(context: PagesContext): Promise<Response> {
 
   try {
     const cacheControl = cacheControlForMonth(month);
-    const response = json(await fetchMonthlyRows(bucket, month), 200, cacheControl);
+    const response = month >= ROW_JSON_CUTOVER_MONTH
+      ? await fetchMonthlyJsonResponse(bucket, month, cacheControl)
+      : json(await fetchMonthlyJsonlRows(bucket, month), 200, cacheControl);
 
     context.waitUntil(
       cache.put(cacheKey, response.clone()).catch(() => {
@@ -72,10 +77,24 @@ export async function onRequestGet(context: PagesContext): Promise<Response> {
   }
 }
 
-async function fetchMonthlyRows(bucket: R2BucketLike, month: string): Promise<StatsRow[]> {
+async function fetchMonthlyJsonlRows(bucket: R2BucketLike, month: string): Promise<StatsRow[]> {
   const key = `${R2_JSONL_PREFIX}${month}.jsonl`;
   const body = await bucket.get(key);
   return body ? parseR2Jsonl(await body.text(), key) : [];
+}
+
+async function fetchMonthlyJsonResponse(
+  bucket: R2BucketLike,
+  month: string,
+  cacheControl: string,
+): Promise<Response> {
+  const object = await bucket.get(`${R2_JSON_PREFIX}${month}.json`);
+  return new Response(object?.body ?? "[]", {
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": cacheControl,
+    },
+  });
 }
 
 function parseR2Jsonl(text: string, key: string): StatsRow[] {
@@ -136,6 +155,6 @@ export const testApi = {
   CLOSED_MONTH_CACHE_CONTROL,
   cacheControlForMonth,
   normalizeCacheUrl,
-  fetchMonthlyRows,
+  fetchMonthlyRows: fetchMonthlyJsonlRows,
   parseR2Jsonl,
 };

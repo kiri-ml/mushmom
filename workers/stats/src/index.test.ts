@@ -1,21 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  appendRowJson,
   appendStats,
-  bucketTimestamp,
   default as worker,
   isStatsRow,
   monthlyKey,
-  parseJsonl,
-  serializeJsonl,
-  updateStatsPoint,
-  upsertRow,
+  ROW_JSON_CUTOVER_EPOCH,
   type Env,
   type StatsRow,
 } from "./index";
 
 class FakeBucket {
   readonly objects = new Map<string, string>();
-  readonly puts: Array<{ key: string; value: string }> = [];
+  readonly puts: Array<{ key: string; value: string; contentType?: string }> = [];
   readonly gets: string[] = [];
 
   async get(key: string): Promise<{ text(): Promise<string> } | null> {
@@ -24,8 +21,8 @@ class FakeBucket {
     return value === undefined ? null : { async text() { return value; } };
   }
 
-  async put(key: string, value: string): Promise<void> {
-    this.puts.push({ key, value });
+  async put(key: string, value: string, options?: { httpMetadata?: { contentType: string } }): Promise<void> {
+    this.puts.push({ key, value, contentType: options?.httpMetadata?.contentType });
     this.objects.set(key, value);
   }
 }
@@ -34,8 +31,6 @@ function createEnv(bucket = new FakeBucket()): Env {
   return {
     STATS_BUCKET: bucket,
     CURRENT_USERS_URL: "https://example.test/current",
-    SAMPLE_INTERVAL_SECONDS: 300,
-    ADMIN_TOKEN: "secret",
   };
 }
 
@@ -66,21 +61,26 @@ function responsesWith(...payloads: unknown[]): typeof fetch {
 }
 
 describe("stats rows", () => {
-  it("buckets timestamps into five-minute intervals", () => {
-    expect(bucketTimestamp(1_783_036_979, 300)).toBe(1_783_036_800);
-  });
-
   it("generates UTC monthly keys from bucketed timestamps", () => {
     expect(monthlyKey(1_783_036_800)).toBe("stats/jsonl/2026-07.jsonl");
     expect(monthlyKey(Date.parse("2026-06-30T23:55:00.000Z") / 1000))
       .toBe("stats/jsonl/2026-06.jsonl");
+    expect(monthlyKey(ROW_JSON_CUTOVER_EPOCH - 1)).toBe("stats/jsonl/2026-07.jsonl");
+    expect(monthlyKey(ROW_JSON_CUTOVER_EPOCH)).toBe("stats/json/2026-08.json");
   });
 
-  it("parses and serializes compact JSONL tuples", () => {
-    const rows: StatsRow[] = [[300, 0], [600, 1234, 617], [900, null, 450]];
-    expect(parseJsonl("[300,0]\n[600,1234,617]\n[900,null,450]\n")).toEqual(rows);
-    expect(serializeJsonl(rows)).toBe("[300,0]\n[600,1234,617]\n[900,null,450]\n");
-    expect(parseJsonl("  \n")).toEqual([]);
+  it("creates and appends compact row-based JSON without parsing", () => {
+    const first = appendRowJson("", [ROW_JSON_CUTOVER_EPOCH, 12, 7]);
+    expect(first).toBe("[[1785542400,12,7]\n]");
+    expect(appendRowJson(first, [ROW_JSON_CUTOVER_EPOCH + 60, null, 8])).toBe(
+      "[[1785542400,12,7]\n,[1785542460,null,8]\n]",
+    );
+    expect(JSON.parse(appendRowJson(first, [ROW_JSON_CUTOVER_EPOCH + 60, 14]))).toEqual([
+      [ROW_JSON_CUTOVER_EPOCH, 12, 7],
+      [ROW_JSON_CUTOVER_EPOCH + 60, 14],
+    ]);
+    expect(() => appendRowJson("not-json", [ROW_JSON_CUTOVER_EPOCH, 1]))
+      .toThrow("closing bracket");
   });
 
   it("validates tuple rows, including zero user counts", () => {
@@ -96,14 +96,6 @@ describe("stats rows", () => {
     expect(isStatsRow([300, 1.5])).toBe(false);
     expect(isStatsRow([300, "12"])).toBe(false);
     expect(isStatsRow([300])).toBe(false);
-  });
-
-  it("upserts, deduplicates, and sorts rows oldest-first", () => {
-    expect(upsertRow([[900, 9], [300, 3], [600, 6], [600, 7]], [600, 8])).toEqual([
-      [300, 3],
-      [600, 8],
-      [900, 9],
-    ]);
   });
 });
 
@@ -386,6 +378,50 @@ describe("scheduled stats append", () => {
     expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe("[1783036860,5,3]\n");
   });
 
+  it("creates row-based JSON at the exact cutover instant", async () => {
+    const bucket = new FakeBucket();
+
+    await appendStats(createEnv(bucket), {
+      now: new Date("2026-08-01T00:00:00.000Z"),
+      fetcher: responseWith({ usercount: 5, uniquecount: 3 }),
+      retryDelayMs: 0,
+    });
+
+    expect(bucket.gets).toEqual(["stats/json/2026-08.json"]);
+    expect(bucket.objects.get("stats/json/2026-08.json")).toBe("[[1785542400,5,3]\n]");
+    expect(bucket.puts[0]?.contentType).toBe("application/json; charset=utf-8");
+  });
+
+  it("appends row-based JSON by replacing only its final bracket", async () => {
+    const bucket = new FakeBucket();
+    bucket.objects.set("stats/json/2026-08.json", "[[1785542400,5,3]\n]");
+
+    await appendStats(createEnv(bucket), {
+      now: new Date("2026-08-01T00:01:00.000Z"),
+      fetcher: responseWith({ usercount: 7, uniquecount: 4 }),
+      retryDelayMs: 0,
+    });
+
+    const stored = bucket.objects.get("stats/json/2026-08.json");
+    expect(stored).toBe("[[1785542400,5,3]\n,[1785542460,7,4]\n]");
+    expect(JSON.parse(stored ?? "")).toEqual([
+      [1785542400, 5, 3],
+      [1785542460, 7, 4],
+    ]);
+  });
+
+  it("rejects post-cutover objects without a final closing bracket", async () => {
+    const bucket = new FakeBucket();
+    bucket.objects.set("stats/json/2026-08.json", "[[1785542400,5,3");
+
+    await expect(appendStats(createEnv(bucket), {
+      now: new Date("2026-08-01T00:01:00.000Z"),
+      fetcher: responseWith({ usercount: 7, uniquecount: 4 }),
+      retryDelayMs: 0,
+    })).rejects.toThrow("closing bracket");
+    expect(bucket.puts).toEqual([]);
+  });
+
   it("appends the first row directly to an empty monthly object", async () => {
     const bucket = new FakeBucket();
     bucket.objects.set("stats/jsonl/2026-07.jsonl", "");
@@ -451,122 +487,12 @@ describe("scheduled error logging", () => {
   });
 });
 
-describe("manual stats point updates", () => {
-  it("does not expose the removed manual sync endpoint", async () => {
-    const response = await worker.fetch(new Request("https://stats.example/admin/sync", {
-      method: "POST",
-      headers: { authorization: "Bearer secret" },
-    }), createEnv());
-
+describe("worker HTTP handler", () => {
+  it("does not expose manual update endpoints", async () => {
+    const bucket = new FakeBucket();
+    const response = await worker.fetch();
     expect(response.status).toBe(404);
     await expect(response.json()).resolves.toEqual({ error: "Not found." });
-  });
-
-  it("updates the monthly object row for the bucket containing the timestamp", async () => {
-    const bucket = new FakeBucket();
-    bucket.objects.set("stats/jsonl/2026-07.jsonl", "[1783036500,8]\n[1783036800,5]\n[1783037100,12]\n");
-
-    const result = await updateStatsPoint(createEnv(bucket), 1_783_036_979, 42, 21);
-
-    expect(result).toEqual({
-      bucket: 1_783_036_800,
-      key: "stats/jsonl/2026-07.jsonl",
-      data: [1_783_036_800, 42, 21],
-    });
-    expect(bucket.gets).toEqual(["stats/jsonl/2026-07.jsonl"]);
-    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe(
-      "[1783036500,8]\n[1783036800,42,21]\n[1783037100,12]\n",
-    );
-  });
-
-  it("creates the monthly object when the timestamp belongs to a missing object", async () => {
-    const bucket = new FakeBucket();
-
-    await updateStatsPoint(createEnv(bucket), 1_783_036_979, 42, 21);
-
-    expect(bucket.gets).toEqual(["stats/jsonl/2026-07.jsonl"]);
-    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe("[1783036800,42,21]\n");
-  });
-
-  it("writes a legacy two-value tuple when the unique count is omitted", async () => {
-    const bucket = new FakeBucket();
-
-    const result = await updateStatsPoint(createEnv(bucket), 1_783_036_979, 42);
-
-    expect(result.data).toEqual([1_783_036_800, 42]);
-    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe("[1783036800,42]\n");
-  });
-
-  it("writes null usercount when a manual point has positive uniquecount only", async () => {
-    const bucket = new FakeBucket();
-
-    const result = await updateStatsPoint(createEnv(bucket), 1_783_036_979, 0, 21);
-
-    expect(result.data).toEqual([1_783_036_800, null, 21]);
-    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe("[1783036800,null,21]\n");
-  });
-
-  it("exposes an authenticated POST API for manual point updates", async () => {
-    const bucket = new FakeBucket();
-    const env = createEnv(bucket);
-    const response = await worker.fetch(new Request("https://stats.example/admin/point", {
-      method: "POST",
-      headers: {
-        authorization: "Bearer secret",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({ timestamp: 1_783_036_979, usercount: 42, uniquecount: 21 }),
-    }), env);
-
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({
-      bucket: 1_783_036_800,
-      key: "stats/jsonl/2026-07.jsonl",
-      data: [1_783_036_800, 42, 21],
-    });
-    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe("[1783036800,42,21]\n");
-  });
-
-  it("accepts an authenticated legacy point without a unique count", async () => {
-    const bucket = new FakeBucket();
-    const env = createEnv(bucket);
-    const response = await worker.fetch(new Request("https://stats.example/admin/point", {
-      method: "POST",
-      headers: {
-        authorization: "Bearer secret",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({ timestamp: 1_783_036_979, usercount: 42 }),
-    }), env);
-
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({
-      bucket: 1_783_036_800,
-      key: "stats/jsonl/2026-07.jsonl",
-      data: [1_783_036_800, 42],
-    });
-    expect(bucket.objects.get("stats/jsonl/2026-07.jsonl")).toBe("[1783036800,42]\n");
-  });
-
-  it.each([
-    { usercount: 42 },
-    { timestamp: 1_783_036_979, uniquecount: 1 },
-    { timestamp: 1_783_036_979, usercount: 1.5, uniquecount: 1 },
-    { timestamp: 1_783_036_979, usercount: 42, uniquecount: -1 },
-    { timestamp: 1_783_036_979, usercount: 42, uniquecount: null },
-  ])("rejects incomplete or invalid manual update payloads without writing", async (payload) => {
-    const bucket = new FakeBucket();
-    const env = createEnv(bucket);
-    const response = await worker.fetch(new Request("https://stats.example/admin/point", {
-      method: "POST",
-      headers: {
-        authorization: "Bearer secret",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    }), env);
-
-    expect(response.status).toBe(400);
     expect(bucket.puts).toEqual([]);
   });
 });
