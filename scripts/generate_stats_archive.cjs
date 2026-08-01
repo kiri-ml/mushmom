@@ -14,21 +14,27 @@ async function main() {
   const options = parseArgs(process.argv.slice(2));
   const outputDir = path.resolve(process.cwd(), options.output || DEFAULT_OUTPUT_DIR);
   const jsonDir = options.jsonDir ? path.resolve(process.cwd(), options.jsonDir) : null;
-  const legacyPayloadPromise = readJson(LEGACY_SOURCE);
-  const r2Rows = jsonDir ? readJsonDirectory(jsonDir) : [];
-  const legacyPayload = await legacyPayloadPromise;
-  const { chunks } = generateArchive(legacyPayload, outputDir, r2Rows);
-  console.log(`Generated ${chunks.length} stats archive chunks in ${path.relative(process.cwd(), outputDir)}`);
+  const input = jsonDir
+    ? readJsonDirectoryWithMetadata(jsonDir)
+    : { rows: [], periods: [] };
+  const newestInputPeriod = jsonDir ? validateJsonPeriods(input.periods) : null;
+  const archiveThroughPeriod = newestInputPeriod ? previousMonthName(newestInputPeriod) : undefined;
+  const legacyPayload = await readJson(LEGACY_SOURCE);
+  const result = generateArchive(legacyPayload, outputDir, input.rows, archiveThroughPeriod);
+  const inputSummary = newestInputPeriod
+    ? ` from ${input.periods.length} R2 files (${input.rows.length} rows; newest ${newestInputPeriod})`
+    : " in explicit legacy-only mode";
+  console.log(`Generated ${result.chunks.length} stats archive chunks through ${result.manifest.archiveThroughPeriod}${inputSummary} in ${path.relative(process.cwd(), outputDir)}`);
 }
 
-function generateArchive(legacyPayload, outputDir, r2InputRows = []) {
+function generateArchive(legacyPayload, outputDir, r2InputRows = [], requestedArchiveThroughPeriod) {
   const legacyRows = normalizeLegacyRows(extractRows(legacyPayload))
     .filter((row) => row[0] < CUTOVER_EPOCH);
   const r2Rows = normalizeR2Rows(r2InputRows)
     .filter((row) => row[0] >= CUTOVER_EPOCH);
-  const archiveThroughPeriod = r2Rows.length > 0
+  const archiveThroughPeriod = requestedArchiveThroughPeriod || (r2Rows.length > 0
     ? previousMonthName(monthNameForTimestamp(Math.max(...r2Rows.map((row) => row[0]))))
-    : previousMonthName(monthNameForTimestamp(CUTOVER_EPOCH));
+    : previousMonthName(monthNameForTimestamp(CUTOVER_EPOCH)));
   const rows = mergeRows(legacyRows, r2Rows)
     .filter((row) => monthNameForTimestamp(row[0]) <= archiveThroughPeriod);
   const chunkGroups = buildChunks(rows, archiveThroughPeriod);
@@ -152,12 +158,38 @@ function isMonthlyArchivePeriod(period, horizon) {
 }
 
 function readJsonDirectory(jsonDir) {
+  return readJsonDirectoryWithMetadata(jsonDir).rows;
+}
+
+function readJsonDirectoryWithMetadata(jsonDir) {
   if (!fs.existsSync(jsonDir) || !fs.statSync(jsonDir).isDirectory()) {
     throw new Error(`JSON directory not found: ${jsonDir}`);
   }
   const files = fs.readdirSync(jsonDir).filter((file) => file.endsWith(".json")).sort();
-  if (files.length === 0) return [];
-  return files.flatMap((file) => parseJsonFile(path.join(jsonDir, file), file));
+  const periods = files.map((file) => {
+    const match = /^(\d{4}-\d{2})\.json$/.exec(file);
+    if (!match || !parseMonthKey(match[1])) throw new Error(`Invalid R2 JSON filename: ${file}`);
+    return match[1];
+  });
+  return {
+    periods,
+    rows: files.flatMap((file) => parseJsonFile(path.join(jsonDir, file), file)),
+  };
+}
+
+function validateJsonPeriods(periods, requiredThroughPeriod = new Date().toISOString().slice(0, 7)) {
+  const cutoverPeriod = monthNameForTimestamp(CUTOVER_EPOCH);
+  if (periods.length === 0) throw new Error("R2 JSON directory contains no monthly files.");
+  if (!parseMonthKey(requiredThroughPeriod)) throw new Error(`Invalid required R2 period: ${requiredThroughPeriod}`);
+  const uniquePeriods = [...new Set(periods)].sort();
+  if (uniquePeriods.at(-1) > requiredThroughPeriod) {
+    throw new Error(`R2 JSON directory contains a future monthly file: ${uniquePeriods.at(-1)}.`);
+  }
+  const expectedPeriods = monthKeysBetween(cutoverPeriod, requiredThroughPeriod);
+  const available = new Set(uniquePeriods);
+  const missing = expectedPeriods.filter((period) => !available.has(period));
+  if (missing.length > 0) throw new Error(`R2 JSON directory is missing monthly files: ${missing.join(", ")}.`);
+  return requiredThroughPeriod;
 }
 
 function parseJsonFile(filePath, fileName = path.basename(filePath)) {
@@ -248,6 +280,22 @@ function previousMonthName(monthKey) {
   return date.toISOString().slice(0, 7);
 }
 
+function monthKeysBetween(start, end) {
+  const first = parseMonthKey(start);
+  const last = parseMonthKey(end);
+  if (!first || !last || start > end) return [];
+  const periods = [];
+  for (let year = first.year, month = first.month; year < last.year || (year === last.year && month <= last.month);) {
+    periods.push(`${year}-${String(month).padStart(2, "0")}`);
+    month += 1;
+    if (month === 13) {
+      year += 1;
+      month = 1;
+    }
+  }
+  return periods;
+}
+
 function parseMonthKey(value) {
   const match = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(value);
   return match ? { year: Number(match[1]), month: Number(match[2]) } : null;
@@ -275,6 +323,8 @@ function parseArgs(args) {
       const value = args[++index];
       if (!value) throw new Error(`Missing value for ${arg}.`);
       options[arg === "--output" ? "output" : "jsonDir"] = value;
+    } else if (arg === "--legacy-only") {
+      options.legacyOnly = true;
     } else if (arg === "--help" || arg === "-h") {
       printHelp();
       process.exit(0);
@@ -282,14 +332,16 @@ function parseArgs(args) {
       throw new Error(`Unknown argument: ${arg}`);
     }
   }
+  if (options.jsonDir && options.legacyOnly) throw new Error("Use either --json-dir or --legacy-only, not both.");
+  if (!options.jsonDir && !options.legacyOnly) throw new Error("Specify --json-dir <directory> or explicitly use --legacy-only.");
   return options;
 }
 
 function printHelp() {
-  console.log(`Usage: node scripts/generate_stats_archive.cjs [--json-dir <directory>] [--output <directory>]
+  console.log(`Usage: node scripts/generate_stats_archive.cjs (--json-dir <directory> | --legacy-only) [--output <directory>]
 
 Always reads legacy history from ${LEGACY_SOURCE}.
-If R2 JSON is absent, archives through the month before the fixed cutover.`);
+Use --legacy-only to archive through the month before the fixed cutover.`);
 }
 
 async function readJson(source) {
@@ -316,6 +368,8 @@ module.exports = {
   buildChunks,
   generateArchive,
   normalizeLegacyRows,
+  parseArgs,
   parseJsonFile,
   readJsonDirectory,
+  validateJsonPeriods,
 };

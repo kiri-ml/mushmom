@@ -184,8 +184,10 @@ async function loadStatsModule() {
 type ArchiveManifest = StatsManifest;
 type ArchiveRow = [number, number | null] | [number, number | null, number | null];
 type StatsArchiveGenerator = {
-  generateArchive: (payload: unknown, outputDir: string, r2Rows?: ArchiveRow[]) => { manifest: ArchiveManifest };
+  generateArchive: (payload: unknown, outputDir: string, r2Rows?: ArchiveRow[], archiveThroughPeriod?: string) => { manifest: ArchiveManifest };
+  parseArgs: (args: string[]) => { output?: string; jsonDir?: string; legacyOnly?: boolean };
   readJsonDirectory: (jsonDir: string) => ArchiveRow[];
+  validateJsonPeriods: (periods: string[], requiredThroughPeriod?: string) => string;
 };
 
 function makeChunk(period: string, minTimestamp: number, maxTimestamp = minTimestamp): StatsManifestChunk {
@@ -370,6 +372,36 @@ describe("stats archive generator", () => {
       timestampBase: 1782864000,
       data: [[0, 20]],
     });
+  });
+
+  it("requires contiguous R2 month files through the required month", () => {
+    const generator = require(path.join(repoRoot, "scripts/generate_stats_archive.cjs")) as StatsArchiveGenerator;
+
+    expect(generator.validateJsonPeriods(["2026-07", "2026-08"], "2026-08")).toBe("2026-08");
+    expect(() => generator.validateJsonPeriods(["2026-07"], "2026-08")).toThrow("missing monthly files: 2026-08");
+    expect(() => generator.validateJsonPeriods(["2026-08"], "2026-08")).toThrow("missing monthly files: 2026-07");
+    expect(() => generator.validateJsonPeriods([], "2026-08")).toThrow("contains no monthly files");
+    expect(() => generator.validateJsonPeriods(["2026-07", "2026-09"], "2026-08")).toThrow("future monthly file: 2026-09");
+  });
+
+  it("advances through an explicitly empty archived month", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mushmom-empty-archive-month-"));
+    const generator = require(path.join(repoRoot, "scripts/generate_stats_archive.cjs")) as StatsArchiveGenerator;
+    const { manifest } = generator.generateArchive({ data: [
+      { timestamp: "2026-06-30T23:45:04Z", usercount: 10 },
+    ] }, tempDir, [[1785542400, 30]], "2026-07");
+
+    expect(manifest.archiveThroughPeriod).toBe("2026-07");
+    expect(manifest.chunks.some((chunk) => chunk.period === "2026-07")).toBe(false);
+  });
+
+  it("requires an explicit CLI input mode", () => {
+    const generator = require(path.join(repoRoot, "scripts/generate_stats_archive.cjs")) as StatsArchiveGenerator;
+
+    expect(() => generator.parseArgs([])).toThrow("Specify --json-dir");
+    expect(generator.parseArgs(["--json-dir", "stats"])).toEqual({ jsonDir: "stats" });
+    expect(generator.parseArgs(["--legacy-only"])).toEqual({ legacyOnly: true });
+    expect(() => generator.parseArgs(["--json-dir", "stats", "--legacy-only"])).toThrow("either --json-dir or --legacy-only");
   });
 
   it("enforces cutover ownership, excludes the open month, and resolves duplicates last", () => {

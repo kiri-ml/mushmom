@@ -145,6 +145,11 @@ The archive builder reads monthly JSON objects with `--json-dir`; it does not
 accept JSONL input. Archive source ownership switches from the legacy Google
 Storage dataset to R2 at `2026-07-01T00:00:00Z`.
 
+The input directory must contain one `YYYY-MM.json` file for every UTC month
+from the cutover through the current month. An explicitly empty month is stored
+as `[]`. To intentionally generate a pre-cutover archive without R2 input, use
+`--legacy-only`; omitting both input modes is an error.
+
 Create the R2 bucket:
 
 ```sh
