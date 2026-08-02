@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { bundledLocaleRegistry as localeRegistry, bundledMessages as i18nMessages } from "../src/i18n/data";
+import { nextMonthKey } from "../src/stats-months";
 import { buildApiPreloadTags, buildEchartsLoaderScript, CHINA_ECHARTS_CDN, GLOBAL_ECHARTS_CDN, injectStartupHtml } from "../vite.config";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -40,6 +41,7 @@ const statsManifest = JSON.parse(fs.readFileSync(path.join(repoRoot, "public/ass
   archiveThroughPeriod: string;
   chunks: StatsManifestChunk[];
 };
+const firstRecentMonth = nextMonthKey(statsManifest.archiveThroughPeriod);
 const wranglerToml = fs.readFileSync(path.join(repoRoot, "wrangler.toml"), "utf8");
 
 function createStubElement(overrides: Partial<StubElement> = {}): StubElement {
@@ -263,7 +265,7 @@ describe("vite migration", () => {
         tag: "link",
         attrs: {
           rel: "preload",
-          href: "/api/stats/2026-07",
+          href: `/api/stats/${firstRecentMonth}`,
           as: "fetch",
           crossorigin: "",
         },
@@ -302,7 +304,7 @@ describe("vite migration", () => {
   it("injects API preloads before the ECharts loader and module startup", () => {
     const script = buildEchartsLoaderScript();
     const transformed = injectStartupHtml(indexHtml);
-    const recentPreload = '<link rel="preload" href="/api/stats/2026-07" as="fetch" crossorigin>';
+    const recentPreload = `<link rel="preload" href="/api/stats/${firstRecentMonth}" as="fetch" crossorigin>`;
     const initialPreload = `<link rel="preload" href="/assets/stats/${statsManifest.chunks[0]?.file}" as="fetch" crossorigin>`;
     const currentPreload = '<link rel="preload" href="/api/current" as="fetch" crossorigin>';
     expect(script).toContain(GLOBAL_ECHARTS_CDN);
