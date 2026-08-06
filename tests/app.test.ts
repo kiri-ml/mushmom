@@ -630,35 +630,46 @@ describe("bundled i18n", () => {
 });
 
 describe("app behavior", () => {
-  it("uses two raw lines and two range bands for bucketed timeline ranges", async () => {
+  it("keeps the full raw timeline source and uses dataZoom presets with minmax sampling", async () => {
     const { module, globals } = await loadAppModule();
     useWindow(globals);
     const points = [
-      { date: new Date(Date.UTC(2026, 3, 24, 12, 0, 0)), characterCount: 1200, playerCount: 600 },
+      { date: new Date(Date.UTC(2026, 2, 1, 12, 0, 0)), characterCount: 1100, playerCount: 550 },
       { date: new Date(Date.UTC(2026, 3, 24, 13, 0, 0)), characterCount: 1250, playerCount: 625 },
       { date: new Date(Date.UTC(2026, 3, 25, 12, 0, 0)), characterCount: 1300 },
     ];
     module.testApi.setCurrentRangeForTest("7d");
-    const rawSeries = module.buildTimelineOptions(points).series as Array<{ smooth?: boolean; symbol?: string; type?: string }>;
-    expect(rawSeries.map((series) => series.type)).toEqual(["line", "line"]);
-    expect(rawSeries.every((series) => series.smooth === false)).toBe(true);
-    expect(rawSeries.every((series) => series.symbol === "none")).toBe(true);
-    expect((rawSeries[1] as { data: Array<[number, number | null]> }).data.map(([, value]) => value)).toEqual([600, 625, null]);
+    const sevenDayOptions = module.buildTimelineOptions(points);
+    const sevenDaySeries = sevenDayOptions.series as Array<{
+      data: Array<[number, number | null]>;
+      sampling?: string;
+      smooth?: boolean;
+      symbol?: string;
+      type?: string;
+    }>;
+    expect(sevenDaySeries.map((series) => series.type)).toEqual(["line", "line"]);
+    expect(sevenDaySeries.every((series) => series.sampling === "minmax")).toBe(true);
+    expect(sevenDaySeries.every((series) => series.smooth === false)).toBe(true);
+    expect(sevenDaySeries.every((series) => series.symbol === "none")).toBe(true);
+    expect(sevenDaySeries[0].data).toHaveLength(3);
+    expect(sevenDaySeries[0].data[0]?.[0]).toBe(points[0].date.getTime());
+    expect(sevenDaySeries[1].data.map(([, value]) => value)).toEqual([550, 625, null]);
+    expect(sevenDayOptions.dataZoom[0]).toMatchObject({
+      filterMode: "filter",
+      startValue: points[2].date.getTime() - (7 * 24 * 60 * 60 * 1000),
+      endValue: points[2].date.getTime(),
+    });
+
     module.testApi.setCurrentRangeForTest("28d");
-    const bucketedOptions = module.buildTimelineOptions(points);
-    const bucketedSeries = bucketedOptions.series as Array<{ id?: string; smooth?: boolean; symbol?: string; type?: string }>;
-    expect(bucketedSeries.map((series) => series.type)).toEqual(["line", "line", "line", "line", "line", "line"]);
-    expect(bucketedSeries.map((series) => series.id)).toEqual([
-      "character-range-base", "character-range-spread", "character-average",
-      "player-range-base", "player-range-spread", "player-average",
-    ]);
-    expect(bucketedSeries[2]?.smooth).toBe(true);
-    expect(bucketedSeries[5]?.smooth).toBe(true);
-    expect(bucketedSeries.map((series) => series.symbol)).toEqual(["none", "none", "none", "none", "none", "circle"]);
-    expect((bucketedSeries[5] as { data: Array<[number, number | null]> }).data.map(([, value]) => value)).toEqual([613, null]);
-    expect(bucketedOptions.yAxis.min).toBe(0);
-    expect(bucketedOptions.legend.selectedMode).toBe(false);
-    expect(module.buildTimelineOptions([{ date: new Date(Date.UTC(2026, 3, 25)), characterCount: 0, playerCount: 0 }]).yAxis.max).toBeUndefined();
+    const twentyEightDayOptions = module.buildTimelineOptions(points);
+    expect((twentyEightDayOptions.series[0] as { data: unknown[] }).data).toHaveLength(3);
+    expect(twentyEightDayOptions.dataZoom[0]).toMatchObject({
+      startValue: points[2].date.getTime() - (28 * 24 * 60 * 60 * 1000),
+      endValue: points[2].date.getTime(),
+    });
+    expect(twentyEightDayOptions.yAxis.min).toBe(0);
+    expect(twentyEightDayOptions.yAxis.max).toBeUndefined();
+    expect(twentyEightDayOptions.legend.selectedMode).toBe(false);
   });
 
   it("shows a timeline symbol only when a series has one data point", async () => {

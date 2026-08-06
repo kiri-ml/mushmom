@@ -729,70 +729,100 @@ function timelineSymbol(sampleCount: number): "circle" | "none" {
   return sampleCount === 1 ? "circle" : "none";
 }
 
+function getTimelineViewBounds(points: StatsPoint[], range: ChartRange): { startValue?: number; endValue?: number } {
+  if (points.length === 0) return {};
+  const first = points[0].date.getTime();
+  const latest = points[points.length - 1].date.getTime();
+  if (range === "all") return { startValue: first, endValue: latest };
+  if (range === "ytd") {
+    const latestDate = points[points.length - 1].date;
+    return {
+      startValue: Math.max(first, new Date(latestDate.getFullYear(), 0, 1).getTime()),
+      endValue: latest,
+    };
+  }
+  const duration = FIXED_RANGE_DURATION_MS[range as Exclude<ChartRange, "all" | "ytd">]
+    ?? FIXED_RANGE_DURATION_MS["24h"];
+  return { startValue: Math.max(first, latest - duration), endValue: latest };
+}
+
+function buildTimelineDataZoom(points: StatsPoint[], range: ChartRange) {
+  const bounds = getTimelineViewBounds(points, range);
+  const shared = { ...bounds, filterMode: "filter" as const, throttle: 80 };
+  return [
+    { type: "inside", ...shared },
+    {
+      type: "slider",
+      ...shared,
+      height: 24,
+      bottom: 16,
+      borderColor: CHART_AXIS_COLOR,
+      fillerColor: "rgba(125, 216, 125, 0.14)",
+      handleStyle: { color: "#7dd87d" },
+      textStyle: { color: CHART_LABEL_COLOR },
+    },
+  ];
+}
+
 function buildTimelineOptions(points: StatsPoint[]) {
-  const visible = pointsForRange(points, currentRange);
-  const config = getTimelineConfig(currentRange, visible);
-  const characterValues = visible.map((point) => [point.date.getTime(), point.characterCount]);
-  const playerValues = visible.map((point) => [
+  // Keep the complete raw series mounted. Range presets only change dataZoom; ECharts samples the visible window.
+  const characterValues = points.map((point) => [point.date.getTime(), point.characterCount]);
+  const firstPlayerIndex = points.findIndex((point) => typeof point.playerCount === "number" && Number.isFinite(point.playerCount));
+  const playerSource = firstPlayerIndex >= 0 ? points.slice(firstPlayerIndex) : [];
+  const playerValues = playerSource.map((point) => [
     point.date.getTime(),
     typeof point.playerCount === "number" && Number.isFinite(point.playerCount) ? point.playerCount : null,
   ]);
   const playerSampleCount = playerValues.reduce((count, [, value]) => count + (value == null ? 0 : 1), 0);
-  const bucketed = config.unit != null && config.size != null;
-  const bucketConfig = { unit: config.unit as BucketUnit, size: config.size as number };
-  const characterBuckets = bucketed ? buildBucketSummaries(visible, bucketConfig) : [];
-  const playerBuckets = bucketed ? buildBucketSummaries(visible, bucketConfig, (point) => point.playerCount) : [];
-  const characterBucketMap = new Map(characterBuckets.map((bucket) => [bucket.time, bucket]));
-  const playerBucketMap = new Map(playerBuckets.map((bucket) => [bucket.time, bucket]));
-  const bucketMax = Math.max(0, ...characterBuckets.map((bucket) => bucket.max), ...playerBuckets.map((bucket) => bucket.max));
-  const playerBucketTimes = characterBuckets.map((bucket) => bucket.time);
-  const characterName = getSeriesLabel(config);
-  const playerName = getPlayerSeriesLabel(config);
-  const summaryRows = (label: string, bucket: BucketSummary): string[] => [
-    `<strong>${label}</strong>`,
-    `${tr("chart.tooltip.avg")}: ${formatInteger(bucket.avg)}`,
-    `${tr("chart.tooltip.peak")}: ${formatInteger(bucket.max)}`,
-    `${tr("chart.tooltip.trough")}: ${formatInteger(bucket.min)}`,
-    tr("chart.tooltip.samplesCount", { count: formatLocaleNumber(bucket.samples) }),
-  ];
+  const characterName = tr("chart.series.characters");
+  const playerName = tr("metric.players");
 
   return {
     ...baseAxisOption(),
-    tooltip: bucketed ? {
-      trigger: "axis",
-      backgroundColor: CHART_TOOLTIP_BACKGROUND,
-      borderColor: CHART_TOOLTIP_BORDER,
-      textStyle: { color: "#f4f1e8" },
-      formatter: (params: Array<{ axisValue?: number | string }>) => {
-        const time = Number(params[0]?.axisValue);
-        if (!Number.isFinite(time)) return "";
-        const characterBucket = characterBucketMap.get(time);
-        const playerBucket = playerBucketMap.get(time);
-        if (!characterBucket && !playerBucket) return "";
-        const rows = [`<strong>${formatBucketRange(time, bucketConfig)}</strong>`];
-        if (characterBucket) rows.push(...summaryRows(tr("chart.series.characters"), characterBucket));
-        if (playerBucket) rows.push(...summaryRows(tr("metric.players"), playerBucket));
-        return rows.join("<br />");
-      },
-    } : { trigger: "axis", backgroundColor: CHART_TOOLTIP_BACKGROUND, borderColor: CHART_TOOLTIP_BORDER, textStyle: { color: "#f4f1e8" }, valueFormatter: formatTooltipValue },
     legend: { top: 8, data: [characterName, playerName], selectedMode: false, textStyle: { color: CHART_LABEL_COLOR } },
     grid: { left: 52, right: 24, top: 54, bottom: 76 },
     xAxis: { type: "time", axisLine: { lineStyle: { color: CHART_AXIS_COLOR } }, axisLabel: { color: CHART_LABEL_COLOR, formatter: (value: number) => formatTimelineAxisLabel(value, currentRange) }, splitLine: { show: false } },
-    yAxis: { type: "value", min: 0, max: bucketed && bucketMax > 0 ? Math.ceil(bucketMax * 1.03) : undefined, axisLabel: { color: CHART_LABEL_COLOR }, splitLine: { lineStyle: { color: CHART_GRID_COLOR } } },
-    dataZoom: [{ type: "inside", throttle: 80 }, { type: "slider", height: 24, bottom: 16, borderColor: CHART_AXIS_COLOR, fillerColor: "rgba(125, 216, 125, 0.14)", handleStyle: { color: "#7dd87d" }, textStyle: { color: CHART_LABEL_COLOR } }],
-    series: bucketed ? [
-      { id: "character-range-base", type: "line", stack: "character-range", data: characterBuckets.map((bucket) => [bucket.time, bucket.min]), symbol: "none", lineStyle: { opacity: 0 }, itemStyle: { opacity: 0 }, areaStyle: { opacity: 0 }, silent: true, tooltip: { show: false } },
-      { id: "character-range-spread", type: "line", stack: "character-range", data: characterBuckets.map((bucket) => [bucket.time, bucket.max - bucket.min]), symbol: "none", lineStyle: { opacity: 0 }, areaStyle: { color: "rgba(125, 216, 125, 0.16)" }, silent: true, tooltip: { show: false } },
-      { id: "character-average", name: characterName, type: "line", smooth: true, symbol: timelineSymbol(characterBuckets.length), symbolSize: 7, lineStyle: { width: 3, color: "#7dd87d" }, itemStyle: { color: "#f1c44f" }, data: characterBuckets.map((bucket) => [bucket.time, Math.round(bucket.avg)]), z: 3 },
-      { id: "player-range-base", type: "line", stack: "player-range", data: playerBucketTimes.map((time) => [time, playerBucketMap.get(time)?.min ?? null]), symbol: "none", connectNulls: false, lineStyle: { opacity: 0 }, itemStyle: { opacity: 0 }, areaStyle: { opacity: 0 }, silent: true, tooltip: { show: false } },
-      { id: "player-range-spread", type: "line", stack: "player-range", data: playerBucketTimes.map((time) => { const bucket = playerBucketMap.get(time); return [time, bucket ? bucket.max - bucket.min : null]; }), symbol: "none", connectNulls: false, lineStyle: { opacity: 0 }, areaStyle: { color: PLAYER_RANGE_COLOR }, silent: true, tooltip: { show: false } },
-      { id: "player-average", name: playerName, type: "line", smooth: true, connectNulls: false, symbol: timelineSymbol(playerBuckets.length), symbolSize: 6, lineStyle: { width: 3, color: PLAYER_COLOR }, itemStyle: { color: PLAYER_COLOR }, data: playerBucketTimes.map((time) => [time, playerBucketMap.has(time) ? Math.round(playerBucketMap.get(time)!.avg) : null]), z: 4 },
-    ] : [
-      { id: "characters", name: characterName, type: "line", smooth: false, symbol: timelineSymbol(characterValues.length), symbolSize: 7, lineStyle: { width: 3, color: "#7dd87d" }, itemStyle: { color: "#f1c44f" }, areaStyle: { color: { type: "linear", x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: "rgba(125, 216, 125, 0.36)" }, { offset: 1, color: "rgba(125, 216, 125, 0.02)" }] } }, data: characterValues },
-      { id: "players", name: playerName, type: "line", smooth: false, connectNulls: false, symbol: timelineSymbol(playerSampleCount), symbolSize: 6, lineStyle: { width: 3, color: PLAYER_COLOR }, itemStyle: { color: PLAYER_COLOR }, data: playerValues, z: 4 },
+    yAxis: { type: "value", min: 0, axisLabel: { color: CHART_LABEL_COLOR }, splitLine: { lineStyle: { color: CHART_GRID_COLOR } } },
+    dataZoom: buildTimelineDataZoom(points, currentRange),
+    series: [
+      {
+        id: "characters",
+        name: characterName,
+        type: "line",
+        sampling: "minmax",
+        smooth: false,
+        symbol: timelineSymbol(characterValues.length),
+        symbolSize: 7,
+        lineStyle: { width: 3, color: "#7dd87d" },
+        itemStyle: { color: "#f1c44f" },
+        areaStyle: { color: { type: "linear", x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: "rgba(125, 216, 125, 0.36)" }, { offset: 1, color: "rgba(125, 216, 125, 0.02)" }] } },
+        data: characterValues,
+      },
+      {
+        id: "players",
+        name: playerName,
+        type: "line",
+        sampling: "minmax",
+        smooth: false,
+        connectNulls: false,
+        symbol: timelineSymbol(playerSampleCount),
+        symbolSize: 6,
+        lineStyle: { width: 3, color: PLAYER_COLOR },
+        itemStyle: { color: PLAYER_COLOR },
+        data: playerValues,
+        z: 4,
+      },
     ],
-    graphic: bucketed ? (characterBuckets.length === 0 ? emptyGraphic() : null) : (characterValues.length === 0 ? emptyGraphic() : null),
+    graphic: characterValues.length === 0 ? emptyGraphic() : null,
   };
+}
+
+function applyTimelineRange(): void {
+  if (!chart) {
+    render();
+    return;
+  }
+  chart.setOption({ dataZoom: buildTimelineDataZoom(allPoints, currentRange) });
 }
 
 function pointsForMetric(points: StatsPoint[], metric: ChartMetric = activeMetric): StatsPoint[] {
@@ -957,7 +987,11 @@ rangeButtons.forEach((button) => {
   button.addEventListener("click", () => {
     currentRange = (button.dataset.range as ChartRange) || "7d";
     rangeButtons.forEach((item) => item.classList.toggle("is-active", item === button));
-    render();
+    if (activeChart === "timeline") {
+      applyTimelineRange();
+    } else {
+      render();
+    }
   });
 });
 
