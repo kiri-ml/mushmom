@@ -640,7 +640,7 @@ describe("app behavior", () => {
     ];
     module.testApi.setCurrentRangeForTest("7d");
     const sevenDayOptions = module.buildTimelineOptions(points);
-    const sevenDaySeries = sevenDayOptions.series as Array<{
+    const sevenDaySeries = sevenDayOptions.series as unknown as Array<{
       data: Array<[number, number | null]>;
       sampling?: string;
       smooth?: boolean;
@@ -668,7 +668,7 @@ describe("app behavior", () => {
       endValue: points[2].date.getTime(),
     });
     expect(twentyEightDayOptions.yAxis.min).toBe(0);
-    expect(twentyEightDayOptions.yAxis.max).toBeUndefined();
+    expect("max" in twentyEightDayOptions.yAxis).toBe(false);
     expect(twentyEightDayOptions.legend.selectedMode).toBe(false);
   });
 
