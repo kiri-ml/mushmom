@@ -630,7 +630,7 @@ describe("bundled i18n", () => {
 });
 
 describe("app behavior", () => {
-  it("keeps the full raw timeline source and uses dataZoom presets with minmax sampling", async () => {
+  it("keeps the full raw timeline source and uses dataZoom presets with LTTB sampling", async () => {
     const { module, globals } = await loadAppModule();
     useWindow(globals);
     const points = [
@@ -648,7 +648,7 @@ describe("app behavior", () => {
       type?: string;
     }>;
     expect(sevenDaySeries.map((series) => series.type)).toEqual(["line", "line"]);
-    expect(sevenDaySeries.every((series) => series.sampling === "minmax")).toBe(true);
+    expect(sevenDaySeries.every((series) => series.sampling === "lttb")).toBe(true);
     expect(sevenDaySeries.every((series) => series.smooth === false)).toBe(true);
     expect(sevenDaySeries.every((series) => series.symbol === "none")).toBe(true);
     expect(sevenDaySeries[0].data).toHaveLength(3);
